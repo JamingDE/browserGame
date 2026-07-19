@@ -6,6 +6,12 @@ interface Props {
   roomCode: string;
   isHost: boolean;
   yourId: string;
+  pendingStart?: {
+    members: LobbyMember[];
+    roomName: string;
+    maxPlayers: number;
+    startHearts: number;
+  } | null;
   onGameStart: () => void;
   onExit: () => void;
 }
@@ -34,6 +40,7 @@ export function WaitingRoom({
   roomCode,
   isHost,
   yourId,
+  pendingStart,
   onGameStart,
   onExit,
 }: Props) {
@@ -43,7 +50,13 @@ export function WaitingRoom({
 
   useEffect(() => {
     const sock = getSocket();
-    const onRoster = (r: Roster) => setRoster(r);
+    const onRoster = (r: Roster) => {
+      console.log("[waiting] roster update", r);
+      setRoster(r);
+      // Fallback: Falls der Server signalisiert dass das Spiel läuft,
+      // wir aber noch nicht game:started bekommen haben → nichts tun,
+      // App.tsx kümmert sich um den Wechsel. Das roster ist nur Info.
+    };
     const onKick = (reason: string) => {
       setKicked(reason);
       setTimeout(onExit, 1800);
@@ -56,12 +69,30 @@ export function WaitingRoom({
     };
   }, [onExit]);
 
+  // Fallback: Falls wir ein pendingStart haben (Race-Condition: game:started
+  // kam vor dem View-Wechsel), es in den roster-State übernehmen.
+  useEffect(() => {
+    if (pendingStart && !roster) {
+      setRoster({
+        roomCode,
+        roomName: pendingStart.roomName,
+        hostName: pendingStart.members.find((m) => m.isHost)?.name ?? "Host",
+        maxPlayers: pendingStart.maxPlayers,
+        startHearts: pendingStart.startHearts,
+        members: pendingStart.members,
+        gameStarted: true,
+      });
+    }
+  }, [pendingStart, roster, roomCode]);
+
   if (kicked) {
     return (
       <div className="waiting-wrap">
         <div className="card waiting-card" style={{ textAlign: "center" }}>
           <div style={{ fontSize: 48 }}>🚪</div>
-          <h2 style={{ color: "var(--crimson)", marginTop: 12 }}>Hinausgeworfen</h2>
+          <h2 style={{ color: "var(--crimson)", marginTop: 12 }}>
+            Hinausgeworfen
+          </h2>
           <p className="muted">{kicked}</p>
         </div>
       </div>
@@ -85,6 +116,7 @@ export function WaitingRoom({
   }
 
   function startGame() {
+    console.log("[waiting] requesting game start");
     getSocket().emit("host:start-game");
     onGameStart();
   }
@@ -154,7 +186,11 @@ export function WaitingRoom({
               <div className="avatar">{pickAvatar(m.name, m.isHost)}</div>
               <div className="name">{m.name}</div>
               <div className="role">
-                {m.isHost ? "👑 Game Master" : m.id === yourId ? "Du" : "Abenteurer"}
+                {m.isHost
+                  ? "👑 Game Master"
+                  : m.id === yourId
+                  ? "Du"
+                  : "Abenteurer"}
               </div>
             </div>
           ))}
@@ -173,9 +209,7 @@ export function WaitingRoom({
             {isHost
               ? players.length === 0
                 ? "Warte auf Spieler…"
-                : `${players.length} Spieler${
-                    players.length === 1 ? "" : ""
-                  } dabei`
+                : `${players.length} Spieler dabei`
               : "Warte auf Spielstart…"}
           </div>
           {isHost && (

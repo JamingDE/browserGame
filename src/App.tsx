@@ -34,15 +34,21 @@ interface StartPayload {
 
 export default function App() {
   const [view, setView] = useState<View>({ kind: "lobby" });
+  // Puffert das start-Payload, falls es vor dem View-Wechsel in "waiting"
+  // ankommt (Race-Condition-Schutz).
+  const [pendingStart, setPendingStart] = useState<StartPayload | null>(null);
 
-  // game:started: kommt vom Server, sobald der Host das Spiel startet.
-  // Host bekommt die finale Roster mit, Spieler nur den Wechsel-Signal.
+  // game:started: Global registriert, damit kein Event verpasst wird.
   useEffect(() => {
-    if (view.kind !== "waiting") return;
     const sock = getSocket();
     const onStarted = (payload: StartPayload) => {
+      console.log("[app] game:started received", payload);
+      setPendingStart(payload);
       setView((v) => {
-        if (v.kind !== "waiting") return v;
+        if (v.kind !== "waiting") {
+          console.log("[app] not in waiting view, ignoring", v.kind);
+          return v;
+        }
         if (v.isHost) {
           return {
             kind: "host",
@@ -60,7 +66,7 @@ export default function App() {
     return () => {
       sock.off("game:started", onStarted);
     };
-  }, [view.kind]);
+  }, []);
 
   return (
     <>
@@ -89,15 +95,19 @@ export default function App() {
 
       {view.kind === "waiting" && (
         <WaitingRoom
+          key={view.roomCode + "-wait"}
           roomCode={view.roomCode}
           isHost={view.isHost}
           yourId={view.yourId}
+          pendingStart={pendingStart}
           onGameStart={() => {
-            // Host hat selbst gestartet: View-Wechsel passiert via
-            // game:started-Event vom Server. Fallback, falls der
-            // Server nicht antwortet: nichts tun, warte auf Event.
+            // Host hat den Button geklickt; server broadcastet game:started.
+            // Der View-Wechsel passiert über den Listener oben.
           }}
-          onExit={() => setView({ kind: "lobby" })}
+          onExit={() => {
+            setPendingStart(null);
+            setView({ kind: "lobby" });
+          }}
         />
       )}
 

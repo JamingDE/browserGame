@@ -11,6 +11,7 @@ import {
   createRoom,
   generateRoomCode,
   getRoom,
+  getRoomBySocket,
   joinRoom,
   leaveRoom,
   lobbySnapshot,
@@ -41,20 +42,23 @@ if (isProd) {
   });
 }
 
-// Hilfsfunktion: Socket → Room finden
-function findRoomBySocket(socketId: string) {
-  for (const code of io.sockets.adapter.rooms.keys()) {
-    if (code.length !== 4 || code !== code.toUpperCase()) continue;
-    const set = io.sockets.adapter.rooms.get(code);
-    if (set?.has(socketId)) return getRoom(code);
+// Hilfsfunktion: Socket in die Socket.IO-Room aufnehmen (falls noch nicht drin)
+function ensureSocketInRoom(socketId: string, roomCode: string) {
+  const s = io.sockets.sockets.get(socketId);
+  if (s && !s.rooms.has(roomCode)) {
+    s.join(roomCode);
+    console.log(`[io] re-joined ${socketId} → ${roomCode}`);
   }
-  return undefined;
 }
 
-// Lobby-Roster an alle Mitglieder eines Raums broadcasten
+// Broadcast-Hilfsfunktionen
 function broadcastRoster(roomCode: string) {
   const room = getRoom(roomCode);
   if (!room) return;
+  // Sicherstellen, dass alle Mitglieder in der Socket.IO-Room sind
+  for (const socketId of room.members.keys()) {
+    ensureSocketInRoom(socketId, roomCode);
+  }
   io.to(roomCode).emit("lobby:roster", lobbySnapshot(room));
 }
 
@@ -104,58 +108,82 @@ io.on("connection", (socket) => {
       gameStarted: room.gameStarted,
     });
     broadcastRoster(room.roomCode);
-    // Falls das Spiel schon läuft: Host um aktuellen State bitten
+
+    // Falls das Spiel schon läuft: Host um State bitten,
+    // UND dem Spieler signalisieren, dass das Spiel läuft.
     if (room.gameStarted) {
+      console.log(
+        `[room] ${socket.id} joined running game ${room.roomCode} → notify`
+      );
+      io.to(socket.id).emit("game:started", {
+        members: lobbySnapshot(room).members,
+        roomName: room.config.roomName,
+        maxPlayers: room.config.maxPlayers,
+        startHearts: room.config.startHearts,
+      });
       io.to(room.hostSocketId).emit("host:request-state");
     }
     console.log(
-      `[room] ${socket.id} joined ${room.roomCode} (members=${room.members.size})`
+      `[room] ${socket.id} joined ${room.roomCode} (members=${room.members.size}, started=${room.gameStarted})`
     );
   });
 
   // === Host startet das Spiel ===
   socket.on("host:start-game", () => {
-    const room = findRoomBySocket(socket.id);
-    if (!room || room.hostSocketId !== socket.id) return;
+    const room = getRoomBySocket(socket.id);
+    if (!room) {
+      console.warn(`[room] start-game: no room for ${socket.id}`);
+      return;
+    }
+    if (room.hostSocketId !== socket.id) {
+      console.warn(
+        `[room] start-game: ${socket.id} is not host of ${room.roomCode}`
+      );
+      return;
+    }
     room.gameStarted = true;
-    // Allen Bescheid sagen: Lobby-Phase ist vorbei. Der Host bekommt
-    // zusätzlich die finale Roster, damit er den initialen Game-State
-    // mit allen Spielern aufbauen kann.
+    // Sicherstellen, dass alle Mitglieder in der Socket.IO-Room sind
+    for (const sid of room.members.keys()) {
+      ensureSocketInRoom(sid, room.roomCode);
+    }
     const snapshot = lobbySnapshot(room);
+    console.log(
+      `[room] ${room.roomCode} game started → broadcasting to ${room.members.size} members:`,
+      Array.from(room.members.keys())
+    );
     io.to(room.roomCode).emit("game:started", {
       members: snapshot.members,
       roomName: snapshot.roomName,
       maxPlayers: snapshot.maxPlayers,
       startHearts: snapshot.startHearts,
     });
-    console.log(`[room] ${room.roomCode} game started`);
   });
 
-  // === Host kickt einen Spieler (in der Lobby) ===
+  // === Host kickt einen Spieler ===
   socket.on("host:kick", (memberId) => {
-    const room = findRoomBySocket(socket.id);
+    const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
-    if (memberId === socket.id) return; // sich selbst nicht kicken
+    if (memberId === socket.id) return;
     io.to(memberId).emit("lobby:kick", "Du wurdest vom Host entfernt.");
     io.sockets.sockets.get(memberId)?.disconnect(true);
   });
 
-  // === Host broadcastet aktuellen Game-State ===
+  // === Host broadcastet Game-State ===
   socket.on("host:state-sync", (state) => {
-    const room = findRoomBySocket(socket.id);
+    const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
     room.state = state;
     socket.to(room.roomCode).emit("room:state", state);
   });
 
   socket.on("host:player-update", () => {
-    const room = findRoomBySocket(socket.id);
+    const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id || !room.state) return;
     socket.to(room.roomCode).emit("room:state", room.state);
   });
 
   socket.on("host:wheel-result", (label) => {
-    const room = findRoomBySocket(socket.id);
+    const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
     io.to(room.roomCode).emit("player:toast", {
       kind: "wheel",
@@ -165,7 +193,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("host:dice-result", (value, sides) => {
-    const room = findRoomBySocket(socket.id);
+    const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
     io.to(room.roomCode).emit("player:toast", {
       kind: "dice",
@@ -177,9 +205,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     const info = leaveRoom(socket.id);
     if (info.roomCode && !info.isEmpty) {
-      // Allen verbleibenden Mitgliedern aktualisierte Roster schicken
       broadcastRoster(info.roomCode);
-      // Falls das Spiel läuft: State an Host-Anfrage weiterleiten etc.
       if (info.newHostId) {
         console.log(`[room] ${info.roomCode} new host=${info.newHostId}`);
       }

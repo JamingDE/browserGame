@@ -23,6 +23,8 @@ export interface RoomMembership {
 }
 
 const rooms = new Map<string, RoomMembership>();
+// Reverse-Map: socketId → roomCode (für schnelles Lookup bei Disconnect)
+const socketToRoom = new Map<string, string>();
 
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export function generateRoomCode(): string {
@@ -35,6 +37,12 @@ export function generateRoomCode(): string {
 
 export function getRoom(roomCode: string): RoomMembership | undefined {
   return rooms.get(roomCode);
+}
+
+export function getRoomBySocket(socketId: string): RoomMembership | undefined {
+  const code = socketToRoom.get(socketId);
+  if (!code) return undefined;
+  return rooms.get(code);
 }
 
 export function createRoom(
@@ -58,6 +66,7 @@ export function createRoom(
     gameStarted: false,
   };
   rooms.set(roomCode, room);
+  socketToRoom.set(hostSocketId, roomCode);
   return room;
 }
 
@@ -65,9 +74,7 @@ export function joinRoom(
   roomCode: string,
   socketId: string,
   playerName: string
-):
-  | { room: RoomMembership; member: LobbyMember }
-  | { error: string } {
+): { room: RoomMembership; member: LobbyMember } | { error: string } {
   const room = rooms.get(roomCode);
   if (!room) return { error: `Raum ${roomCode} existiert nicht.` };
   if (room.members.size >= room.config.maxPlayers) {
@@ -80,6 +87,7 @@ export function joinRoom(
     joinedAt: Date.now(),
   };
   room.members.set(socketId, member);
+  socketToRoom.set(socketId, roomCode);
   return { room, member };
 }
 
@@ -88,30 +96,32 @@ export function leaveRoom(socketId: string): {
   newHostId?: string;
   isEmpty: boolean;
 } {
-  for (const [code, room] of rooms.entries()) {
-    if (room.members.has(socketId)) {
-      room.members.delete(socketId);
-      const wasHost = room.hostSocketId === socketId;
+  const code = socketToRoom.get(socketId);
+  socketToRoom.delete(socketId);
+  if (!code) return { isEmpty: false };
 
-      if (room.members.size === 0) {
-        rooms.delete(code);
-        return { roomCode: code, isEmpty: true };
-      }
+  const room = rooms.get(code);
+  if (!room) return { roomCode: code, isEmpty: true };
 
-      let newHostId: string | undefined;
-      if (wasHost) {
-        const next = room.members.keys().next();
-        if (!next.done && next.value) {
-          room.hostSocketId = next.value;
-          room.hostName = room.members.get(next.value)!.name;
-          room.members.get(next.value)!.isHost = true;
-          newHostId = next.value;
-        }
-      }
-      return { roomCode: code, newHostId, isEmpty: false };
+  room.members.delete(socketId);
+  const wasHost = room.hostSocketId === socketId;
+
+  if (room.members.size === 0) {
+    rooms.delete(code);
+    return { roomCode: code, isEmpty: true };
+  }
+
+  let newHostId: string | undefined;
+  if (wasHost) {
+    const next = room.members.keys().next();
+    if (!next.done && next.value) {
+      room.hostSocketId = next.value;
+      room.hostName = room.members.get(next.value)!.name;
+      room.members.get(next.value)!.isHost = true;
+      newHostId = next.value;
     }
   }
-  return { isEmpty: false };
+  return { roomCode: code, newHostId, isEmpty: false };
 }
 
 // Snapshot für Lobby-Broadcast (Map → Array, sortiert nach Join-Reihenfolge).
@@ -130,7 +140,7 @@ export function lobbySnapshot(room: RoomMembership) {
   };
 }
 
-// Hilfsliste (legacy, in M2 nicht mehr direkt verwendet).
+// Hilfsliste (legacy, nicht mehr direkt verwendet).
 export function listPlayers(room: RoomMembership): Player[] {
   return Array.from(room.members.values()).map((m) => ({
     id: m.id,
