@@ -118,8 +118,16 @@ io.on("connection", (socket) => {
     const room = findRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
     room.gameStarted = true;
-    // Allen Bescheid sagen: Lobby-Phase ist vorbei
-    io.to(room.roomCode).emit("game:started");
+    // Allen Bescheid sagen: Lobby-Phase ist vorbei. Der Host bekommt
+    // zusätzlich die finale Roster, damit er den initialen Game-State
+    // mit allen Spielern aufbauen kann.
+    const snapshot = lobbySnapshot(room);
+    io.to(room.roomCode).emit("game:started", {
+      members: snapshot.members,
+      roomName: snapshot.roomName,
+      maxPlayers: snapshot.maxPlayers,
+      startHearts: snapshot.startHearts,
+    });
     console.log(`[room] ${room.roomCode} game started`);
   });
 

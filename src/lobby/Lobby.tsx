@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getSocket } from "../net/socket.js";
+import { loadPlayerName, savePlayerName } from "../utils/storage.js";
 
 interface Props {
   onHost: (roomCode: string) => void;
@@ -11,11 +12,12 @@ type Tab = "host" | "join";
 export function Lobby({ onHost, onPlayer }: Props) {
   const [tab, setTab] = useState<Tab>("host");
   const [roomName, setRoomName] = useState("");
-  const [hostName, setHostName] = useState("");
+  // Gespeicherten Namen als Default vorschlagen
+  const [hostName, setHostName] = useState(loadPlayerName());
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [startHearts, setStartHearts] = useState(5);
   const [joinCode, setJoinCode] = useState("");
-  const [playerName, setPlayerName] = useState("");
+  const [playerName, setPlayerName] = useState(loadPlayerName());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -23,6 +25,7 @@ export function Lobby({ onHost, onPlayer }: Props) {
     setError(null);
     if (!roomName.trim()) return setError("Bitte einen Raum-Namen eingeben.");
     if (!hostName.trim()) return setError("Bitte deinen Namen eingeben.");
+    savePlayerName(hostName.trim());
     setBusy(true);
     const sock = getSocket();
     sock.emit(
@@ -46,6 +49,7 @@ export function Lobby({ onHost, onPlayer }: Props) {
     const code = joinCode.trim().toUpperCase();
     if (code.length !== 4) return setError("Code muss 4 Zeichen sein.");
     if (!playerName.trim()) return setError("Bitte deinen Namen eingeben.");
+    savePlayerName(playerName.trim());
     setBusy(true);
     const sock = getSocket();
     sock.emit(

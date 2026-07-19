@@ -121,6 +121,37 @@ export function createInitialGameState(
   };
 }
 
+// State aus Lobby-Roster aufbauen. Alle Spieler (inkl. Host) werden
+// mit der konfigurierten Start-HP angelegt. Socket-IDs bleiben erhalten,
+// damit Spieler in der Player-View sich selbst finden können.
+export function createGameStateFromRoster(
+  roomCode: string,
+  hostId: string,
+  hostName: string,
+  roomName: string,
+  maxPlayers: number,
+  startHearts: number,
+  roster: { id: string; name: string; isHost: boolean }[]
+): GameState {
+  const base = createInitialGameState(
+    roomCode,
+    hostId,
+    hostName,
+    roomName,
+    maxPlayers,
+    startHearts
+  );
+  base.players = roster.map((m) => ({
+    id: m.id,
+    name: m.name,
+    hearts: startHearts,
+    maxHearts: startHearts,
+    inventory: [],
+    abilities: [],
+  }));
+  return base;
+}
+
 // Member in der Lobby-Phase (vor Spielstart). Rein servergetrieben —
 // der Host-State ist erst nach "Spiel starten" autoritativ.
 export interface LobbyMember {
@@ -145,7 +176,12 @@ export interface ServerToClientEvents {
     gameStarted: boolean;
   }) => void;
   "lobby:kick": (reason: string) => void;
-  "game:started": () => void;
+  "game:started": (roster: {
+    members: LobbyMember[];
+    roomName: string;
+    maxPlayers: number;
+    startHearts: number;
+  }) => void;
   // Player-Phase
   "host:request-state": () => void; // Server bittet Host um aktuellen State
   "player:toast": (toast: {

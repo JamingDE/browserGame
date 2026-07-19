@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import { getSocket } from "../net/socket.js";
 import {
-  createInitialGameState,
+  createGameStateFromRoster,
   type Asset,
   type GameState,
+  type Player,
   type Slide,
   type SlideElement,
+  type WheelSegment,
 } from "../../shared/types.js";
 
 // === IDs ===
@@ -16,12 +18,10 @@ export function uid(prefix = "id"): string {
 }
 
 // === Sync-Helper ===
-// Stellt sicher, dass nicht bei jeder Mikro-Änderung gesynced wird.
 let syncScheduled = false;
 function scheduleSync(get: () => HostStore) {
   if (syncScheduled) return;
   syncScheduled = true;
-  // ~30ms debounce = flüssig, aber nicht spammy
   setTimeout(() => {
     syncScheduled = false;
     const sock = getSocket();
@@ -29,19 +29,21 @@ function scheduleSync(get: () => HostStore) {
   }, 30);
 }
 
+interface InitParams {
+  roomCode: string;
+  hostId: string;
+  hostName: string;
+  roomName: string;
+  maxPlayers: number;
+  startHearts: number;
+  roster: { id: string; name: string; isHost: boolean }[];
+}
+
 interface HostStore {
   state: GameState;
   selectedElementId: string | null;
 
-  // Initialisierung
-  init: (params: {
-    roomCode: string;
-    hostId: string;
-    hostName: string;
-    roomName: string;
-    maxPlayers: number;
-    startHearts: number;
-  }) => void;
+  init: (params: InitParams) => void;
 
   // Slides
   addSlide: () => void;
@@ -52,8 +54,15 @@ interface HostStore {
   duplicateSlide: (slideId: string) => void;
 
   // Elements
-  addElement: (slideId: string, el: Partial<SlideElement> & { type: SlideElement["type"] }) => string;
-  updateElement: (slideId: string, elementId: string, patch: Partial<SlideElement>) => void;
+  addElement: (
+    slideId: string,
+    el: Partial<SlideElement> & { type: SlideElement["type"] }
+  ) => string;
+  updateElement: (
+    slideId: string,
+    elementId: string,
+    patch: Partial<SlideElement>
+  ) => void;
   removeElement: (slideId: string, elementId: string) => void;
   selectElement: (elementId: string | null) => void;
 
@@ -61,27 +70,54 @@ interface HostStore {
   addAsset: (asset: Asset) => void;
   saveAssetToRoom: (assetId: string) => void;
 
+  // Players
+  updatePlayer: (playerId: string, patch: Partial<Player>) => void;
+  addInventoryItem: (playerId: string, item: string) => void;
+  removeInventoryItem: (playerId: string, index: number) => void;
+  addAbility: (playerId: string, ability: string) => void;
+  removeAbility: (playerId: string, index: number) => void;
+
+  // Wheel
+  setWheelSegments: (segments: WheelSegment[]) => void;
+  setWheelSpinning: (spinning: boolean) => void;
+  setWheelResult: (label: string | undefined) => void;
+
+  // Dice
+  setDiceSides: (sides: number) => void;
+  rollDice: (playerName?: string) => number;
+  clearDiceHistory: () => void;
+
   // Sync
   sync: () => void;
 }
 
 export const useHostStore = create<HostStore>((set, get) => ({
-  state: createInitialGameState("init", "init", "Game Master", "Temporär", 4, 5),
+  state: createGameStateFromRoster(
+    "init",
+    "init",
+    "Game Master",
+    "Temporär",
+    4,
+    5,
+    [{ id: "init", name: "Game Master", isHost: true }]
+  ),
   selectedElementId: null,
 
   init: (params) =>
     set({
-      state: createInitialGameState(
+      state: createGameStateFromRoster(
         params.roomCode,
         params.hostId,
         params.hostName,
         params.roomName,
         params.maxPlayers,
-        params.startHearts
+        params.startHearts,
+        params.roster
       ),
       selectedElementId: null,
     }),
 
+  // === Slides ===
   addSlide: () => {
     const id = uid("slide");
     const slide: Slide = {
@@ -104,7 +140,10 @@ export const useHostStore = create<HostStore>((set, get) => ({
     set((s) => {
       if (s.state.slides.length <= 1) return s;
       const slides = s.state.slides.filter((sl) => sl.id !== slideId);
-      const activeSlideIndex = Math.min(s.state.activeSlideIndex, slides.length - 1);
+      const activeSlideIndex = Math.min(
+        s.state.activeSlideIndex,
+        slides.length - 1
+      );
       return { state: { ...s.state, slides, activeSlideIndex } };
     }),
 
@@ -151,6 +190,7 @@ export const useHostStore = create<HostStore>((set, get) => ({
       return { state: { ...s.state, slides, activeSlideIndex: idx + 1 } };
     }),
 
+  // === Elements ===
   addElement: (slideId, el) => {
     const id = uid("el");
     const full: SlideElement = {
@@ -202,7 +242,10 @@ export const useHostStore = create<HostStore>((set, get) => ({
         ...s.state,
         slides: s.state.slides.map((sl) =>
           sl.id === slideId
-            ? { ...sl, elements: sl.elements.filter((e) => e.id !== elementId) }
+            ? {
+                ...sl,
+                elements: sl.elements.filter((e) => e.id !== elementId),
+              }
             : sl
         ),
       },
@@ -211,6 +254,7 @@ export const useHostStore = create<HostStore>((set, get) => ({
     })),
   selectElement: (elementId) => set({ selectedElementId: elementId }),
 
+  // === Assets ===
   addAsset: (asset) => {
     set((s) => ({
       state: {
@@ -242,6 +286,131 @@ export const useHostStore = create<HostStore>((set, get) => ({
         },
       };
     });
+    scheduleSync(get);
+  },
+
+  // === Players ===
+  updatePlayer: (playerId, patch) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId ? { ...p, ...patch } : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  addInventoryItem: (playerId, item) => {
+    if (!item.trim()) return;
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId
+            ? { ...p, inventory: [...p.inventory, item.trim()] }
+            : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  removeInventoryItem: (playerId, index) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId
+            ? {
+                ...p,
+                inventory: p.inventory.filter((_, i) => i !== index),
+              }
+            : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  addAbility: (playerId, ability) => {
+    if (!ability.trim()) return;
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId
+            ? { ...p, abilities: [...p.abilities, ability.trim()] }
+            : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  removeAbility: (playerId, index) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId
+            ? { ...p, abilities: p.abilities.filter((_, i) => i !== index) }
+            : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  // === Wheel ===
+  setWheelSegments: (segments) => {
+    set((s) => ({ state: { ...s.state, wheel: { ...s.state.wheel, segments } } }));
+    scheduleSync(get);
+  },
+  setWheelSpinning: (spinning) => {
+    set((s) => ({
+      state: { ...s.state, wheel: { ...s.state.wheel, spinning } },
+    }));
+    scheduleSync(get);
+  },
+  setWheelResult: (label) => {
+    set((s) => ({
+      state: { ...s.state, wheel: { ...s.state.wheel, lastResult: label } },
+    }));
+    scheduleSync(get);
+  },
+
+  // === Dice ===
+  setDiceSides: (sides) => {
+    set((s) => ({ state: { ...s.state, die: { ...s.state.die, sides } } }));
+    scheduleSync(get);
+  },
+  rollDice: (playerName) => {
+    const sides = get().state.die.sides;
+    const value = Math.floor(Math.random() * sides) + 1;
+    set((s) => ({
+      state: {
+        ...s.state,
+        die: {
+          ...s.state.die,
+          lastResult: value,
+          history: [
+            { player: playerName, value, at: Date.now() },
+            ...s.state.die.history,
+          ].slice(0, 50),
+        },
+      },
+    }));
+    scheduleSync(get);
+    // Spieler via Server-Toast informieren
+    getSocket().emit("host:dice-result", value, sides);
+    return value;
+  },
+  clearDiceHistory: () => {
+    set((s) => ({
+      state: { ...s.state, die: { ...s.state.die, history: [] } },
+    }));
     scheduleSync(get);
   },
 

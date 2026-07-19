@@ -5,14 +5,28 @@ import { SlideCanvas } from "./SlideCanvas.js";
 import { SlideList } from "./SlideList.js";
 import { AssetBrowser } from "./AssetBrowser.js";
 import { ImageEditor } from "./ImageEditor.js";
-import type { Asset } from "../../shared/types.js";
+import { WheelModal } from "./WheelModal.js";
+import { DiceModal } from "./DiceModal.js";
+import { CharacterPanel } from "./CharacterPanel.js";
+import type { Asset, LobbyMember } from "../../shared/types.js";
 
 interface Props {
   roomCode: string;
+  roomName: string;
+  maxPlayers: number;
+  startHearts: number;
+  roster: LobbyMember[];
   onExit: () => void;
 }
 
-export function HostView({ roomCode, onExit }: Props) {
+export function HostView({
+  roomCode,
+  roomName,
+  maxPlayers,
+  startHearts,
+  roster,
+  onExit,
+}: Props) {
   const init = useHostStore((s) => s.init);
   const state = useHostStore((s) => s.state);
   const sync = useHostStore((s) => s.sync);
@@ -21,21 +35,25 @@ export function HostView({ roomCode, onExit }: Props) {
 
   const [slidesCollapsed, setSlidesCollapsed] = useState(false);
   const [browserCollapsed, setBrowserCollapsed] = useState(false);
+  const [charsOpen, setCharsOpen] = useState(false);
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const [diceOpen, setDiceOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorSeed, setEditorSeed] = useState<Asset[]>([]);
 
-  // Initial-State nur einmal pro Mount setzen.
-  // TODO M2-Verbesserung: echte Lobby-Parameter durchreichen.
+  // Initial-State aus übergebener Roster aufbauen (alle Spieler + Host).
   useEffect(() => {
+    const myId = getSocket().id ?? "host";
     init({
       roomCode,
-      hostId: getSocket().id ?? "host",
-      hostName: "Game Master",
-      roomName: "Temporär",
-      maxPlayers: 4,
-      startHearts: 5,
+      hostId: myId,
+      hostName: roster.find((m) => m.isHost)?.name ?? "Game Master",
+      roomName,
+      maxPlayers,
+      startHearts,
+      roster: roster.map((m) => ({ id: m.id, name: m.name, isHost: m.isHost })),
     });
-  }, [init, roomCode]);
+  }, [init, roomCode, roomName, maxPlayers, startHearts, roster]);
 
   // Erste Slide automatisch anlegen
   useEffect(() => {
@@ -52,9 +70,10 @@ export function HostView({ roomCode, onExit }: Props) {
     };
   }, [sync]);
 
-  // Initialer Push nach Mount
+  // Initialer Push nach Mount (statt Timer besser direkt, aber Sync
+  // braucht eine init-Flanke; 50ms Buffer reicht locker)
   useEffect(() => {
-    const t = setTimeout(() => sync(), 200);
+    const t = setTimeout(() => sync(), 50);
     return () => clearTimeout(t);
   }, [sync]);
 
@@ -74,6 +93,28 @@ export function HostView({ roomCode, onExit }: Props) {
           <span className="muted host-room">{state.roomName}</span>
         </div>
         <div className="host-top-right">
+          <button
+            className="ghost tool-btn"
+            onClick={() => setCharsOpen(true)}
+            title="Charakterbögen"
+          >
+            📜 <span className="tool-label">Helden</span>
+          </button>
+          <button
+            className="ghost tool-btn"
+            onClick={() => setDiceOpen(true)}
+            title="Würfel"
+          >
+            🎲 <span className="tool-label">Würfel</span>
+          </button>
+          <button
+            className="ghost tool-btn"
+            onClick={() => setWheelOpen(true)}
+            title="Glücksrad"
+          >
+            🎡 <span className="tool-label">Rad</span>
+          </button>
+          <span className="tool-sep" />
           <button
             className="ghost"
             onClick={() => setSlidesCollapsed((v) => !v)}
@@ -104,6 +145,9 @@ export function HostView({ roomCode, onExit }: Props) {
         />
       </div>
 
+      {charsOpen && <CharacterPanel onClose={() => setCharsOpen(false)} />}
+      {wheelOpen && <WheelModal onClose={() => setWheelOpen(false)} />}
+      {diceOpen && <DiceModal onClose={() => setDiceOpen(false)} />}
       {editorOpen && (
         <ImageEditor
           initialAssets={editorSeed}
