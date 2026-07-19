@@ -10,7 +10,8 @@ import { DiceModal } from "./DiceModal.js";
 import { CharacterPanel } from "./CharacterPanel.js";
 import { SketchPad } from "../components/SketchPad.js";
 import { SuggestionInbox } from "./SuggestionInbox.js";
-import type { Asset, LobbyMember } from "../../shared/types.js";
+import { PlayerListModal } from "./PlayerListModal.js";
+import type { Asset, GmSuggestionPayload, LobbyMember } from "../../shared/types.js";
 
 interface Props {
   roomCode: string;
@@ -46,6 +47,8 @@ export function HostView({
   const [editorSeed, setEditorSeed] = useState<Asset[]>([]);
   const [sketchOpen, setSketchOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [playerListOpen, setPlayerListOpen] = useState(false);
+  const addSuggestion = useHostStore((s) => s.addSuggestion);
 
   // Initial-State aus Roster
   useEffect(() => {
@@ -81,6 +84,20 @@ export function HostView({
     const t = setTimeout(() => sync(), 50);
     return () => clearTimeout(t);
   }, [sync]);
+
+  // Spieler-Vorschläge GLOBAL empfangen (auch wenn Inbox zu ist).
+  // Vorher war der Listener im Modal → Events gingen verloren, wenn die
+  // Inbox nicht offen war.
+  useEffect(() => {
+    const sock = getSocket();
+    const onSuggestion = (payload: GmSuggestionPayload) => {
+      addSuggestion(payload);
+    };
+    sock.on("gm:suggestion", onSuggestion);
+    return () => {
+      sock.off("gm:suggestion", onSuggestion);
+    };
+  }, [addSuggestion]);
 
   function openEditor(seed?: Asset[]) {
     setEditorSeed(seed ?? []);
@@ -125,6 +142,13 @@ export function HostView({
           <span className="muted host-room">{state.roomName}</span>
         </div>
         <div className="host-top-right">
+          <button
+            className="ghost tool-btn"
+            onClick={() => setPlayerListOpen(true)}
+            title="Spielerverwaltung"
+          >
+            👥 <span className="tool-label">Spieler</span>
+          </button>
           <button
             className="ghost tool-btn"
             onClick={() => setInboxOpen(true)}
@@ -192,6 +216,9 @@ export function HostView({
       {wheelOpen && <WheelModal onClose={() => setWheelOpen(false)} />}
       {diceOpen && <DiceModal onClose={() => setDiceOpen(false)} />}
       {inboxOpen && <SuggestionInbox onClose={() => setInboxOpen(false)} />}
+      {playerListOpen && (
+        <PlayerListModal onClose={() => setPlayerListOpen(false)} />
+      )}
       {sketchOpen && (
         <div className="modal-overlay" onPointerDown={() => setSketchOpen(false)}>
           <div

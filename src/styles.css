@@ -1638,16 +1638,19 @@ textarea:focus {
 }
 .player-main {
   flex: 1;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 20px;
   overflow: auto;
   min-height: 0;
 }
 .player-main .stage {
-  width: min(100%, 1100px);
+  width: 100%;
   max-width: 1100px;
   aspect-ratio: 16 / 9;
+  flex-shrink: 1;
+  height: auto;
 }
 .stage-loading {
   display: grid;

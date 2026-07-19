@@ -8,6 +8,16 @@ interface Props {
   onClose: () => void;
 }
 
+// Helper: broadcastet den aktuellen Rad-Zustand an die Spieler
+function broadcastWheel(payload: {
+  segments: WheelSegment[];
+  rotation: number;
+  spinning: boolean;
+  result?: string;
+}) {
+  getSocket().emit("host:wheel-show", payload);
+}
+
 const COLORS = [
   "#a855f7",
   "#ec4899",
@@ -24,6 +34,15 @@ export function WheelModal({ onClose }: Props) {
   const setSegments = useHostStore((s) => s.setWheelSegments);
   const setWheelSpinning = useHostStore((s) => s.setWheelSpinning);
   const setWheelResult = useHostStore((s) => s.setWheelResult);
+
+  // Beim Öffnen + bei jeder Segment-Änderung: Spieler sehen das Rad.
+  useEffect(() => {
+    broadcastWheel({ segments, rotation: 0, spinning: false });
+    return () => {
+      // Beim Schließen: Spieler-Anzeige ausblenden.
+      getSocket().emit("host:wheel-hide");
+    };
+  }, [segments]);
 
   const [spinning, setSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
@@ -111,11 +130,12 @@ export function WheelModal({ onClose }: Props) {
       angle += slice;
     }
 
-    // Zeiger oben
+    // Zeiger oben: Pfeilspitze zeigt NACH UNTEN aufs Rad.
+    // Vorher war die Spitze oben (Dreieck auf dem Kopf).
     ctx.beginPath();
-    ctx.moveTo(cx, 0);
-    ctx.lineTo(cx - 12, -4 + 16);
-    ctx.lineTo(cx + 12, -4 + 16);
+    ctx.moveTo(cx - 12, 6);
+    ctx.lineTo(cx + 12, 6);
+    ctx.lineTo(cx, 24);
     ctx.closePath();
     ctx.fillStyle = "#f7d77a";
     ctx.strokeStyle = "#1a0e2e";
@@ -130,8 +150,6 @@ export function WheelModal({ onClose }: Props) {
     setWheelSpinning(true);
     const { segment, index } = pickWeighted();
 
-    // Winkel vom index berechnen: der Mitte des gewählten Segments
-    // muss am Zeiger (oben) landen.
     const total = segments.reduce(
       (sum, s) => sum + Math.max(0.01, s.weight),
       0
@@ -141,22 +159,28 @@ export function WheelModal({ onClose }: Props) {
       cumulative += Math.max(0.01, segments[i].weight);
     }
     const sliceMid = (cumulative + Math.max(0.01, segment.weight) / 2) / total;
-    // Zielrotation: Segment-Mitte kommt nach oben (0°)
     const targetAngle = -sliceMid * Math.PI * 2;
-    // Aktuelle Rotation (mod 2π) + 6 volle Umdrehungen + Ziel
     const currentMod = rotation % (Math.PI * 2);
     const newRotation =
       rotation - currentMod + Math.PI * 2 * 6 + targetAngle;
 
-    // Animation über setRotation
+    // Spieler wissen: es dreht sich
+    broadcastWheel({ segments, rotation, spinning: true });
+
     const start = performance.now();
     const duration = 4200;
     const startRot = rotation;
+    let lastBroadcast = 0;
     const animate = (now: number) => {
       const t = Math.min(1, (now - start) / duration);
-      // ease-out-cubic
       const eased = 1 - Math.pow(1 - t, 3);
-      setRotation(startRot + (newRotation - startRot) * eased);
+      const currentRot = startRot + (newRotation - startRot) * eased;
+      setRotation(currentRot);
+      // Spieler bekommen die Rotation live (auf ~20fps gedrosselt)
+      if (now - lastBroadcast > 50) {
+        broadcastWheel({ segments, rotation: currentRot, spinning: true });
+        lastBroadcast = now;
+      }
       if (t < 1) {
         requestAnimationFrame(animate);
       } else {
@@ -165,6 +189,12 @@ export function WheelModal({ onClose }: Props) {
         setWheelResult(segment.label);
         setLastResult(segment.label);
         getSocket().emit("host:wheel-result", segment.label);
+        broadcastWheel({
+          segments,
+          rotation: newRotation,
+          spinning: false,
+          result: segment.label,
+        });
       }
     };
     requestAnimationFrame(animate);

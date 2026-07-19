@@ -25,6 +25,22 @@ export interface RoomMembership {
 const rooms = new Map<string, RoomMembership>();
 // Reverse-Map: socketId → roomCode (für schnelles Lookup bei Disconnect)
 const socketToRoom = new Map<string, string>();
+// Ban-Liste: roomCode → Set der gebannten Spielernamen (kleingeschrieben).
+// Hält bans auch nach Reconnect eines Spielers aufrecht.
+const bansByRoom = new Map<string, Set<string>>();
+
+export function banPlayer(roomCode: string, playerName: string) {
+  const key = playerName.trim().toLowerCase();
+  if (!key) return;
+  if (!bansByRoom.has(roomCode)) bansByRoom.set(roomCode, new Set());
+  bansByRoom.get(roomCode)!.add(key);
+}
+
+export function isBanned(roomCode: string, playerName: string): boolean {
+  const set = bansByRoom.get(roomCode);
+  if (!set) return false;
+  return set.has(playerName.trim().toLowerCase());
+}
 
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export function generateRoomCode(): string {

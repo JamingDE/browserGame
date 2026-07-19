@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-import { getSocket } from "../net/socket.js";
 import { useHostStore } from "../state/store.js";
 import { uid } from "../state/store.js";
 import type { GmSuggestionPayload, InventoryItem } from "../../shared/types.js";
@@ -8,24 +6,16 @@ interface Props {
   onClose: () => void;
 }
 
+// WICHTIG: Der gm:suggestion-Listener ist in HostView registriert (immer
+// gemountet), nicht hier. Dieses Modal zeigt nur den aktuellen State.
+// HINWEIS: Dieser Listener empfängt Vorschläge ECHTZEITIG, auch wenn das Modal
+// nicht geöffnet ist — vorher war er in diesem Modal, wodurch Vorschläge verloren
+// gingen, wenn das Modal geschlossen war.
 export function SuggestionInbox({ onClose }: Props) {
   const suggestions = useHostStore((s) => s.state.suggestions);
   const players = useHostStore((s) => s.state.players);
-  const addSuggestion = useHostStore((s) => s.addSuggestion);
   const decideSuggestion = useHostStore((s) => s.decideSuggestion);
   const addInventoryItem = useHostStore((s) => s.addInventoryItem);
-
-  // Vorschläge vom Server empfangen
-  useEffect(() => {
-    const sock = getSocket();
-    const onSuggestion = (payload: GmSuggestionPayload) => {
-      addSuggestion(payload);
-    };
-    sock.on("gm:suggestion", onSuggestion);
-    return () => {
-      sock.off("gm:suggestion", onSuggestion);
-    };
-  }, [addSuggestion]);
 
   function accept(sug: GmSuggestionPayload) {
     decideSuggestion(sug.id, "accepted");
@@ -54,7 +44,6 @@ export function SuggestionInbox({ onClose }: Props) {
     decideSuggestion(sug.id, "rejected");
   }
 
-  // Nach Status sortieren: unentschieden oben
   const sorted = [...suggestions].sort((a, b) => {
     if (!!a.decided === !!b.decided) return b.createdAt - a.createdAt;
     return a.decided ? 1 : -1;
@@ -77,17 +66,14 @@ export function SuggestionInbox({ onClose }: Props) {
           {sorted.length === 0 && (
             <div className="muted" style={{ padding: 24, textAlign: "center" }}>
               Noch keine Vorschläge. Spieler können Items malen und dir
-              vorschlagen.
+              vorschlagen (🖌️ Item malen).
             </div>
           )}
 
           {sorted.map((sug) => {
             const decided = sug.decided;
             return (
-              <div
-                key={sug.id + uid("x")}
-                className={`inbox-item ${decided ?? ""}`}
-              >
+              <div key={sug.id + uid("x")} className={`inbox-item ${decided ?? ""}`}>
                 <img
                   src={sug.asset.src}
                   alt={sug.label}
@@ -105,23 +91,13 @@ export function SuggestionInbox({ onClose }: Props) {
                 </div>
                 {!decided && (
                   <div className="inbox-actions">
-                    <button
-                      className="primary"
-                      onClick={() => accept(sug)}
-                      title="Asset übernehmen"
-                    >
+                    <button className="primary" onClick={() => accept(sug)}>
                       ✓ Übernehmen
                     </button>
-                    <button
-                      onClick={() => acceptToInventory(sug)}
-                      title="In Inventar eines Spielers legen"
-                    >
+                    <button onClick={() => acceptToInventory(sug)}>
                       🎒 Ins Inventar
                     </button>
-                    <button
-                      className="danger"
-                      onClick={() => reject(sug)}
-                    >
+                    <button className="danger" onClick={() => reject(sug)}>
                       ✕ Ablehnen
                     </button>
                   </div>

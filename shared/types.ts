@@ -214,6 +214,21 @@ export interface ServerToClientEvents {
   }) => void;
   // Spieler → GM Vorschlag
   "gm:suggestion": (payload: GmSuggestionPayload) => void;
+  // Würfel & Glücksrad für alle sichtbar (Live-Broadcast)
+  "gm:dice-show": (payload: {
+    sides: number;
+    value: number | null;
+    rolling: boolean;
+    player?: string;
+  }) => void;
+  "gm:dice-hide": () => void;
+  "gm:wheel-show": (payload: {
+    segments: WheelSegment[];
+    rotation: number;
+    spinning: boolean;
+    result?: string;
+  }) => void;
+  "gm:wheel-hide": () => void;
 }
 
 export interface ClientToServerEvents {
@@ -233,12 +248,28 @@ export interface ClientToServerEvents {
   // Lobby
   "host:start-game": () => void;
   "host:kick": (memberId: string) => void;
+  "host:ban": (memberId: string) => void;
   // Game
   "host:state-sync": (state: GameState) => void;
   "host:player-update": (player: Player) => void;
   "host:player-remove": (playerId: string) => void;
   "host:wheel-result": (label: string) => void;
   "host:dice-result": (value: number, sides: number) => void;
+  // Würfel & Rad für alle sichtbar
+  "host:dice-show": (payload: {
+    sides: number;
+    value: number | null;
+    rolling: boolean;
+    player?: string;
+  }) => void;
+  "host:dice-hide": () => void;
+  "host:wheel-show": (payload: {
+    segments: WheelSegment[];
+    rotation: number;
+    spinning: boolean;
+    result?: string;
+  }) => void;
+  "host:wheel-hide": () => void;
   // Spieler schlägt Asset vor
   "player:suggest": (payload: {
     asset: Asset;

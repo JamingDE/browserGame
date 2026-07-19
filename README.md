@@ -52,12 +52,17 @@ Upload von eigenen Assets funktioniert immer.
 
 MVP-Meilensteine (siehe Projekt-Plan):
 - [x] M1 — Setup & Skeleton
-- [ ] M2 — Lobby (Raum erstellen/joinen, Player-List, Host-Rolle)
-- [ ] M3 — Slide-System + Asset-Browser + Drag&Drop
-- [ ] M4 — Pixabay/Unsplash-Suche
-- [ ] M5 — Bild-Editor (multi-layer, crop, erase)
-- [ ] M6 — Charakterbögen (HP/Inventar/Fähigkeiten)
-- [ ] M7 — Glücksrad + Würfel
-- [ ] M8 — Player-View (Slide-Sync + read-only Bogen)
-- [ ] M9 — IndexedDB-Persistenz
+- [x] M2 — Lobby (Raum erstellen/joinen, Player-List, Host-Rolle, Player-ListModal)
+- [x] M3 — Slide-System + Asset-Browser (Upload-only) + Drag&Drop
+- [ ] M4 — Pixabay/Unsplash-Suche (currently live, needs "search on Enter")
+- [x] M5 — Bild-Editor (multi-layer, crop, erase)
+- [x] M6 — Charakterbögen (HP/Inventar/Fähigkeiten)
+- [x] M7 — Glücksrad + Würfel
+- [x] M8 — Player-View (Slide-Sync + read-only Bogen + Ergebnis-Toasts)
+- [ ] M9 — IndexedDB-Persistenz (planned, currently "skipped" in handoff.md)
 - [ ] M10 — Polish & Deploy-Verify
+
+**Offene Punkte:**
+- M4: Pixabay/Unsplash-Suche jetzt live → muss auf Enter-only geändert werden
+- M9: IndexedDB-Persistenz noch nicht implementiert
+- Handoff.md needs sync with current implementation

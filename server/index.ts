@@ -8,10 +8,12 @@ import type {
   ServerToClientEvents,
 } from "../shared/types.js";
 import {
+  banPlayer,
   createRoom,
   generateRoomCode,
   getRoom,
   getRoomBySocket,
+  isBanned,
   joinRoom,
   leaveRoom,
   lobbySnapshot,
@@ -89,11 +91,13 @@ io.on("connection", (socket) => {
 
   // === Spieler joint ===
   socket.on("player:join", (payload, ack) => {
-    const result = joinRoom(
-      payload.roomCode.toUpperCase(),
-      socket.id,
-      payload.playerName
-    );
+    const code = payload.roomCode.toUpperCase();
+    // Ban-Check VOR joinRoom
+    if (isBanned(code, payload.playerName)) {
+      ack({ ok: false, error: "Du wurdest aus diesem Raum gebannt." });
+      return;
+    }
+    const result = joinRoom(code, socket.id, payload.playerName);
     if ("error" in result) {
       ack({ ok: false, error: result.error });
       return;
@@ -109,8 +113,6 @@ io.on("connection", (socket) => {
     });
     broadcastRoster(room.roomCode);
 
-    // Falls das Spiel schon läuft: Host um State bitten,
-    // UND dem Spieler signalisieren, dass das Spiel läuft.
     if (room.gameStarted) {
       console.log(
         `[room] ${socket.id} joined running game ${room.roomCode} → notify`
@@ -159,13 +161,30 @@ io.on("connection", (socket) => {
     });
   });
 
-  // === Host kickt einen Spieler ===
+  // === Host kickt einen Spieler (this session) ===
   socket.on("host:kick", (memberId) => {
     const room = getRoomBySocket(socket.id);
     if (!room || room.hostSocketId !== socket.id) return;
     if (memberId === socket.id) return;
     io.to(memberId).emit("lobby:kick", "Du wurdest vom Host entfernt.");
     io.sockets.sockets.get(memberId)?.disconnect(true);
+  });
+
+  // === Host bannt einen Spieler (auch Reconnect blockiert) ===
+  socket.on("host:ban", (memberId) => {
+    const room = getRoomBySocket(socket.id);
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (memberId === socket.id) return;
+    const member = room.members.get(memberId);
+    if (member) {
+      banPlayer(room.roomCode, member.name);
+      io.to(memberId).emit(
+        "lobby:kick",
+        "Du wurdest aus diesem Raum gebannt."
+      );
+      io.sockets.sockets.get(memberId)?.disconnect(true);
+      console.log(`[room] ${member.name} banned from ${room.roomCode}`);
+    }
   });
 
   // === Host broadcastet Game-State ===
@@ -200,6 +219,28 @@ io.on("connection", (socket) => {
       label: `W${sides}`,
       value: String(value),
     });
+  });
+
+  // === Würfel & Glücksrad live für alle sichtbar ===
+  socket.on("host:dice-show", (payload) => {
+    const room = getRoomBySocket(socket.id);
+    if (!room || room.hostSocketId !== socket.id) return;
+    socket.to(room.roomCode).emit("gm:dice-show", payload);
+  });
+  socket.on("host:dice-hide", () => {
+    const room = getRoomBySocket(socket.id);
+    if (!room || room.hostSocketId !== socket.id) return;
+    socket.to(room.roomCode).emit("gm:dice-hide");
+  });
+  socket.on("host:wheel-show", (payload) => {
+    const room = getRoomBySocket(socket.id);
+    if (!room || room.hostSocketId !== socket.id) return;
+    socket.to(room.roomCode).emit("gm:wheel-show", payload);
+  });
+  socket.on("host:wheel-hide", () => {
+    const room = getRoomBySocket(socket.id);
+    if (!room || room.hostSocketId !== socket.id) return;
+    socket.to(room.roomCode).emit("gm:wheel-hide");
   });
 
   // === Spieler schlägt gemaltes/erstelltes Asset dem GM vor ===
