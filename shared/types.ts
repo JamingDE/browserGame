@@ -1,33 +1,64 @@
 // Geteilte Typen zwischen Server, Host und Clients.
-// NICHT in src/ oder server/ — wird von beiden benutzt.
 
 export type PlayerId = string;
+
+// Ein Inventar-Item kann entweder reiner Text oder ein Bild (Asset) sein.
+export interface InventoryItem {
+  id: string;
+  kind: "text" | "image";
+  label: string;
+  assetId?: string; // bei kind: "image" → Referenz auf assets.library
+}
+
+// Spieler-Vorschlag: ein Spieler malt/erstellt etwas und schickt es an den GM.
+export interface PlayerSuggestion {
+  id: string;
+  fromPlayerId: PlayerId;
+  fromPlayerName: string;
+  assetId: string; // bereits in library
+  label: string;
+  createdAt: number;
+  decided?: "accepted" | "rejected";
+}
+
+// Kompletter Suggestion-Payload an den GM (inkl. Asset-Daten).
+export interface GmSuggestionPayload extends PlayerSuggestion {
+  asset: Asset; // das eigentliche Asset zum Übernehmen
+}
 
 export interface Player {
   id: PlayerId;
   name: string;
   hearts: number; // aktuelle HP
-  maxHearts: number; // (für Anzeige der leeren Herzen)
-  inventory: string[]; // Items als Strings, vorerst frei Text
-  abilities: string[]; // Fähigkeiten als Strings
+  maxHearts: number;
+  inventory: InventoryItem[];
+  abilities: string[];
 }
+
+// Element-Typen auf einer Slide
+export type SlideElementType = "image" | "text" | "paint";
+export type ElementLayer = "back" | "normal" | "front";
 
 export interface SlideElement {
   id: string;
-  type: "image" | "text";
-  assetId?: string; // Referenz auf assets.library
+  type: SlideElementType;
+  assetId?: string; // Referenz auf assets.library (image/paint)
   text?: string;
+  fontSize?: number; // bei Text (relativ zur Slide-Höhe, 0..1)
+  color?: string; // bei Text
   x: number; // Position relativ zur Slide (0..1)
   y: number;
   w: number; // Breite relativ (0..1)
   h: number;
   rotation: number; // Grad
+  highlighted?: boolean; // GM-Hervorhebung
+  layer?: ElementLayer; // Zeichen-Reihenfolge
 }
 
 export interface Slide {
   id: string;
   name: string;
-  background: string; // Farbe oder "transparent"
+  background: string;
   elements: SlideElement[];
 }
 
@@ -38,13 +69,14 @@ export interface Asset {
   tags: string[];
   width?: number;
   height?: number;
+  transparent?: boolean; // PNG o.Ä.
 }
 
 export interface WheelSegment {
   id: string;
   label: string;
   color: string;
-  weight: number; // Wahrscheinlichkeits-Gewicht
+  weight: number;
 }
 
 export interface GameState {
@@ -58,7 +90,7 @@ export interface GameState {
   slides: Slide[];
   activeSlideIndex: number;
   assets: {
-    saved: { [roomName: string]: string[] }; // assetIds pro Raum-Name
+    saved: { [roomName: string]: string[] };
     library: { [id: string]: Asset };
   };
   wheel: {
@@ -71,6 +103,8 @@ export interface GameState {
     history: { player?: string; value: number; at: number }[];
     lastResult?: number;
   };
+  // Vorschläge vom Spieler an den GM (inkl. Asset-Daten)
+  suggestions: GmSuggestionPayload[];
 }
 
 // Leerer State für neue Räume
@@ -118,12 +152,10 @@ export function createInitialGameState(
       history: [],
       lastResult: undefined,
     },
+    suggestions: [],
   };
 }
 
-// State aus Lobby-Roster aufbauen. Alle Spieler (inkl. Host) werden
-// mit der konfigurierten Start-HP angelegt. Socket-IDs bleiben erhalten,
-// damit Spieler in der Player-View sich selbst finden können.
 export function createGameStateFromRoster(
   roomCode: string,
   hostId: string,
@@ -152,15 +184,6 @@ export function createGameStateFromRoster(
   return base;
 }
 
-// Member in der Lobby-Phase (vor Spielstart). Rein servergetrieben —
-// der Host-State ist erst nach "Spiel starten" autoritativ.
-export interface LobbyMember {
-  id: string; // socketId
-  name: string;
-  isHost: boolean;
-  joinedAt: number;
-}
-
 // === Socket-Events ===
 export interface ServerToClientEvents {
   "room:state": (state: GameState) => void;
@@ -183,15 +206,46 @@ export interface ServerToClientEvents {
     startHearts: number;
   }) => void;
   // Player-Phase
-  "host:request-state": () => void; // Server bittet Host um aktuellen State
+  "host:request-state": () => void;
   "player:toast": (toast: {
-    kind: "dice" | "wheel";
+    kind: "dice" | "wheel" | "info";
     label: string;
     value: string;
   }) => void;
+  // Spieler → GM Vorschlag
+  "gm:suggestion": (payload: GmSuggestionPayload) => void;
 }
 
-// Ack-Antworten vom Server an den Sender.
+export interface ClientToServerEvents {
+  "host:create": (
+    payload: {
+      roomName: string;
+      maxPlayers: number;
+      startHearts: number;
+      hostName: string;
+    },
+    ack: (res: HostCreateAck) => void
+  ) => void;
+  "player:join": (
+    payload: { roomCode: string; playerName: string },
+    ack: (res: PlayerJoinAck) => void
+  ) => void;
+  // Lobby
+  "host:start-game": () => void;
+  "host:kick": (memberId: string) => void;
+  // Game
+  "host:state-sync": (state: GameState) => void;
+  "host:player-update": (player: Player) => void;
+  "host:player-remove": (playerId: string) => void;
+  "host:wheel-result": (label: string) => void;
+  "host:dice-result": (value: number, sides: number) => void;
+  // Spieler schlägt Asset vor
+  "player:suggest": (payload: {
+    asset: Asset;
+    label: string;
+  }) => void;
+}
+
 export type HostCreateAck =
   | {
       ok: true;
@@ -214,27 +268,9 @@ export type PlayerJoinAck =
     }
   | { ok: false; error: string };
 
-export interface ClientToServerEvents {
-  "host:create": (
-    payload: {
-      roomName: string;
-      maxPlayers: number;
-      startHearts: number;
-      hostName: string;
-    },
-    ack: (res: HostCreateAck) => void
-  ) => void;
-  "player:join": (
-    payload: { roomCode: string; playerName: string },
-    ack: (res: PlayerJoinAck) => void
-  ) => void;
-  // Lobby-Phase
-  "host:start-game": () => void;
-  "host:kick": (memberId: string) => void;
-  // Game-Phase
-  "host:state-sync": (state: GameState) => void;
-  "host:player-update": (player: Player) => void;
-  "host:player-remove": (playerId: string) => void;
-  "host:wheel-result": (label: string) => void;
-  "host:dice-result": (value: number, sides: number) => void;
+export interface LobbyMember {
+  id: string; // socketId
+  name: string;
+  isHost: boolean;
+  joinedAt: number;
 }

@@ -3,7 +3,7 @@ import { getSocket } from "../net/socket.js";
 
 export interface ToastItem {
   id: number;
-  kind: "dice" | "wheel";
+  kind: "dice" | "wheel" | "info";
   label: string;
   value: string;
 }

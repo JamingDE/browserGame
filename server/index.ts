@@ -202,6 +202,27 @@ io.on("connection", (socket) => {
     });
   });
 
+  // === Spieler schlägt gemaltes/erstelltes Asset dem GM vor ===
+  socket.on("player:suggest", (payload) => {
+    const room = getRoomBySocket(socket.id);
+    if (!room) return;
+    // Server ist dumm: nur weiterleiten an den Host mit allen Asset-Daten.
+    io.to(room.hostSocketId).emit("gm:suggestion", {
+      id: `sug-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`,
+      fromPlayerId: socket.id,
+      fromPlayerName: room.members.get(socket.id)?.name ?? "Unbekannt",
+      assetId: payload.asset.id,
+      label: payload.label,
+      createdAt: Date.now(),
+      asset: payload.asset,
+    });
+    console.log(
+      `[room] suggestion from ${socket.id} to host ${room.hostSocketId}: ${payload.label}`
+    );
+  });
+
   socket.on("disconnect", () => {
     const info = leaveRoom(socket.id);
     if (info.roomCode && !info.isEmpty) {

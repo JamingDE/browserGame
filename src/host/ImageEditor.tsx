@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useHostStore } from "../state/store.js";
 import type { Asset } from "../../shared/types.js";
+import { fileToDataUrl, loadImage } from "../utils/image.js";
 
 interface Props {
   initialAssets: Asset[];
@@ -20,7 +21,7 @@ interface Layer {
   visible: boolean;
 }
 
-type Tool = "move" | "crop" | "erase";
+type Tool = "move" | "crop" | "erase" | "paint";
 
 export function ImageEditor({ initialAssets, onClose }: Props) {
   const addAsset = useHostStore((s) => s.addAsset);
@@ -34,9 +35,29 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("move");
   const [brushSize, setBrushSize] = useState(24);
+  const [paintColor, setPaintColor] = useState("#e0b15e");
   const [eraserMask, setEraserMask] = useState<boolean[][]>(() =>
     Array.from({ length: canvasH }, () => Array(canvasW).fill(false))
   );
+  // Paint-Layer: eigenes Canvas, wird über alles drüber gelegt
+  const paintLayerRef = useRef<HTMLCanvasElement | null>(null);
+  const paintLayerCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const drawingRef = useRef(false);
+  const lastPaintPoint = useRef<{ x: number; y: number } | null>(null);
+  // Render-Trigger für Live-Paint (separater Ticker)
+  const [paintLayerTick, setPaintLayerTick] = useState(0);
+
+  // Paint-Layer initialisieren
+  useEffect(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext("2d")!;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    paintLayerRef.current = canvas;
+    paintLayerCtxRef.current = ctx;
+  }, []);
   const [cropRect, setCropRect] = useState<{
     x: number;
     y: number;
@@ -120,6 +141,11 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
       ctx.restore();
     }
 
+    // Paint-Layer drüber zeichnen (live)
+    if (paintLayerRef.current) {
+      ctx.drawImage(paintLayerRef.current, 0, 0);
+    }
+
     // Radier-Maske: aus gelöschten Pixeln wird transparent
     if (tool === "erase" && active) {
       const imageData = ctx.getImageData(0, 0, canvasW, canvasH);
@@ -127,7 +153,7 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
       for (let y = 0; y < canvasH; y++) {
         for (let x = 0; x < canvasW; x++) {
           if (eraserMask[y][x]) {
-            data[(y * canvasW + x) * 4 + 3] = 0; // alpha = 0
+            data[(y * canvasW + x) * 4 + 3] = 0;
           }
         }
       }
@@ -138,7 +164,6 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
     if (tool === "crop" && cropRect) {
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.5)";
-      // Dunkles Overlay überall außer im Crop
       ctx.fillRect(0, 0, canvasW, canvasH);
       ctx.clearRect(
         cropRect.x * canvasW,
@@ -146,7 +171,6 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
         cropRect.w * canvasW,
         cropRect.h * canvasH
       );
-      // Layers im Crop neu zeichnen
       for (const l of layers) {
         if (!l.visible) continue;
         const w = l.w * canvasW;
@@ -159,7 +183,7 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
         ctx.drawImage(l.img, -w / 2, -h / 2, w, h);
         ctx.restore();
       }
-      // Crop-Rahmen
+      if (paintLayerRef.current) ctx.drawImage(paintLayerRef.current, 0, 0);
       ctx.strokeStyle = "#f7d77a";
       ctx.lineWidth = 2;
       ctx.setLineDash([8, 4]);
@@ -171,7 +195,16 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
       );
       ctx.restore();
     }
-  }, [layers, activeLayerId, tool, eraserMask, cropRect, canvasW, canvasH]);
+  }, [
+    layers,
+    activeLayerId,
+    tool,
+    eraserMask,
+    cropRect,
+    canvasW,
+    canvasH,
+    paintLayerTick,
+  ]);
 
   // === Werkzeug-Interaktion ===
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -180,7 +213,6 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
     const y = (e.clientY - rect.top) / rect.height;
     if (tool === "crop") {
       if (!cropRect) {
-        // Erster Klick = Anker
         setDraggingCrop({
           phase: "anchor",
           startX: x,
@@ -188,7 +220,6 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
           rect: { x, y, w: 0, h: 0 },
         });
       } else {
-        // In bestehendes Crop klicken → verschieben
         setDraggingCrop({
           phase: "move",
           startX: x,
@@ -199,6 +230,18 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
     } else if (tool === "erase") {
       setEraserStroke(true);
       eraseAt(x, y);
+    } else if (tool === "paint") {
+      drawingRef.current = true;
+      const ctx = paintLayerCtxRef.current!;
+      const px = x * canvasW;
+      const py = y * canvasH;
+      lastPaintPoint.current = { x: px, y: py };
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = paintColor;
+      ctx.beginPath();
+      ctx.arc(px, py, brushSize / 2, 0, Math.PI * 2);
+      ctx.fill();
+      setPaintLayerTick((t) => t + 1);
     }
   }
 
@@ -230,6 +273,19 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
       });
     } else if (eraserStroke) {
       eraseAt(x, y);
+    } else if (tool === "paint" && drawingRef.current) {
+      const ctx = paintLayerCtxRef.current!;
+      const px = x * canvasW;
+      const py = y * canvasH;
+      const last = lastPaintPoint.current!;
+      ctx.strokeStyle = paintColor;
+      ctx.lineWidth = brushSize;
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      lastPaintPoint.current = { x: px, y: py };
+      setPaintLayerTick((t) => t + 1);
     }
   }
 
@@ -243,6 +299,20 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
       setDraggingCrop(null);
     }
     setEraserStroke(false);
+    drawingRef.current = false;
+    lastPaintPoint.current = null;
+  }
+
+  function clearPaintLayer() {
+    if (paintLayerCtxRef.current) {
+      paintLayerCtxRef.current.clearRect(
+        0,
+        0,
+        paintLayerRef.current!.width,
+        paintLayerRef.current!.height
+      );
+      setPaintLayerTick((t) => t + 1);
+    }
   }
 
   function eraseAt(xRel: number, yRel: number) {
@@ -336,6 +406,10 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
         ctx.rotate((l.rotation * Math.PI) / 180);
         ctx.drawImage(l.img, -w / 2, -h / 2, w, h);
         ctx.restore();
+      }
+      // Paint-Layer mit exportieren
+      if (paintLayerRef.current) {
+        ctx.drawImage(paintLayerRef.current, 0, 0);
       }
       // Radier-Maske anwenden
       const imageData = ctx.getImageData(0, 0, canvasW, canvasH);
@@ -435,18 +509,42 @@ export function ImageEditor({ initialAssets, onClose }: Props) {
                 >
                   🩹 Radieren
                 </button>
+                <button
+                  className={tool === "paint" ? "active" : ""}
+                  onClick={() => setTool("paint")}
+                >
+                  🖌️ Malen
+                </button>
               </div>
-              {tool === "erase" && (
+              {(tool === "erase" || tool === "paint") && (
                 <div className="editor-row">
                   <label>Pinselgröße</label>
                   <input
                     type="range"
-                    min={6}
+                    min={2}
                     max={80}
                     value={brushSize}
                     onChange={(e) => setBrushSize(Number(e.target.value))}
                   />
                   <span className="muted">{brushSize}px</span>
+                </div>
+              )}
+              {tool === "paint" && (
+                <div className="editor-row">
+                  <label>Farbe</label>
+                  <input
+                    type="color"
+                    value={paintColor}
+                    onChange={(e) => setPaintColor(e.target.value)}
+                    className="paint-color-input"
+                  />
+                  <button className="ghost" onClick={clearPaintLayer}>
+                    Malerei leeren
+                  </button>
+                </div>
+              )}
+              {tool === "erase" && (
+                <div className="editor-row">
                   <button className="ghost" onClick={clearEraser}>
                     Mask leeren
                   </button>
@@ -558,25 +656,6 @@ function drawChecker(ctx: CanvasRenderingContext2D, w: number, h: number) {
       ctx.fillRect(x, y, size, size);
     }
   }
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
 }
 
 function clamp01(n: number): number {

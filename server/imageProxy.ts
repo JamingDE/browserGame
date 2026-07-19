@@ -20,14 +20,17 @@ export interface SearchResult {
 
 async function searchPixabay(
   q: string,
-  page: number
+  page: number,
+  imageType: "all" | "png" | "photo"
 ): Promise<SearchResult[]> {
   if (!PIXABAY_KEY) return [];
-  // image_type=png liefert vorwiegend freigestellte Texturen/Sprites —
-  // ideal für Tabletop-Assets. safesearch=true ist Pflicht.
+  // Pixabay image_type: all, photo, illustration. PNG ist kein direkter
+  // Filter, aber illustration trifft freigestellte Grafiken besser.
+  const pixType =
+    imageType === "png" ? "illustration" : imageType === "photo" ? "photo" : "all";
   const url = `https://pixabay.com/api/?key=${PIXABAY_KEY}&q=${encodeURIComponent(
     q
-  )}&image_type=png&per_page=30&page=${page}&safesearch=true`;
+  )}&image_type=${pixType}&per_page=30&page=${page}&safesearch=true`;
   const res = await fetch(url);
   if (!res.ok) return [];
   const data = (await res.json()) as {
@@ -56,6 +59,10 @@ export const imageProxyRouter = Router();
 imageProxyRouter.get("/search", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+  const imageType = String(req.query.type ?? "all") as
+    | "all"
+    | "png"
+    | "photo";
 
   if (!q) {
     res.json({ results: [] });
@@ -63,7 +70,7 @@ imageProxyRouter.get("/search", async (req, res) => {
   }
 
   try {
-    const results = await searchPixabay(q, page);
+    const results = await searchPixabay(q, page, imageType);
     res.json({
       results,
       hasKey: Boolean(PIXABAY_KEY),

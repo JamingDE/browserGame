@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSocket } from "../net/socket.js";
-import type { GameState, Player } from "../../shared/types.js";
+import type { Asset, GameState, InventoryItem, Player } from "../../shared/types.js";
+import { SketchPad } from "../components/SketchPad.js";
 
 interface Props {
   roomCode: string;
@@ -39,24 +40,18 @@ function Hearts({ value, max }: { value: number; max: number }) {
 export function PlayerView({ roomCode, onExit }: Props) {
   const [state, setState] = useState<GameState | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sketchOpen, setSketchOpen] = useState(false);
+  const [sentInfo, setSentInfo] = useState<string | null>(null);
 
   useEffect(() => {
     const sock = getSocket();
     const onState = (s: GameState) => setState(s);
     sock.on("room:state", onState);
-    // Nach Reconnect kann der State fehlen → Host darum bitten.
-    // Wir bleiben im gleichen Socket-Provider-Raum; das Join-Event mit Ack
-    // triggert den Server, den Host um State zu bitten.
     const onConnect = () => {
       sock.emit(
         "player:join",
-        {
-          roomCode,
-          playerName: "Reconnect",
-        },
-        () => {
-          /* Ack ignorieren — wir sind bereits im Raum */
-        }
+        { roomCode, playerName: "Reconnect" },
+        () => {}
       );
     };
     sock.on("connect", onConnect);
@@ -66,11 +61,41 @@ export function PlayerView({ roomCode, onExit }: Props) {
     };
   }, [roomCode]);
 
-  // Eigenen Spieler finden (via Socket-ID)
   const myId = getSocket().id;
   const me: Player | undefined = state?.players.find((p) => p.id === myId);
-
   const activeSlide = state?.slides[state?.activeSlideIndex ?? 0];
+
+  function sendSketchToGm(dataUrl: string) {
+    const sock = getSocket();
+    const name = prompt(
+      "Wie heißt das Item?",
+      `Malerei von ${me?.name ?? "Spieler"}`
+    );
+    if (name === null) {
+      setSketchOpen(false);
+      return;
+    }
+    const asset: Asset = {
+      id: `psk-${Date.now().toString(36)}`,
+      name: name.trim() || "Spieler-Item",
+      src: dataUrl,
+      tags: ["player-suggest"],
+      transparent: true,
+    };
+    sock.emit("player:suggest", { asset, label: asset.name });
+    setSentInfo(`„${asset.name}" an den GM gesendet ✨`);
+    setTimeout(() => setSentInfo(null), 4000);
+    setSketchOpen(false);
+  }
+
+  // Elemente nach Layer sortieren
+  const sortedElements = activeSlide
+    ? [...activeSlide.elements].sort((a, b) => {
+        const order = (l?: string) =>
+          l === "back" ? 0 : l === "front" ? 2 : 1;
+        return order(a.layer) - order(b.layer);
+      })
+    : [];
 
   return (
     <div className="player-layout">
@@ -80,11 +105,16 @@ export function PlayerView({ roomCode, onExit }: Props) {
             ←
           </button>
           <span className="brand">🛡️ {roomCode}</span>
-          {state && (
-            <span className="muted host-room">{state.roomName}</span>
-          )}
+          {state && <span className="muted host-room">{state.roomName}</span>}
         </div>
         <div className="host-top-right">
+          <button
+            className="ghost tool-btn"
+            onClick={() => setSketchOpen(true)}
+            title="Item malen und dem GM vorschlagen"
+          >
+            🖌️ <span className="tool-label">Item malen</span>
+          </button>
           {me && (
             <button
               className="ghost tool-btn"
@@ -103,11 +133,11 @@ export function PlayerView({ roomCode, onExit }: Props) {
               className="stage"
               style={{ background: activeSlide?.background ?? "#0d0817" }}
             >
-              {activeSlide?.elements.map((el) => {
+              {sortedElements.map((el) => {
                 const asset = el.assetId
                   ? state.assets.library[el.assetId]
                   : undefined;
-                if (el.type === "image" && asset) {
+                if ((el.type === "image" || el.type === "paint") && asset) {
                   return (
                     <div
                       key={el.id}
@@ -127,7 +157,8 @@ export function PlayerView({ roomCode, onExit }: Props) {
                         style={{
                           width: "100%",
                           height: "100%",
-                          objectFit: "contain",
+                          objectFit:
+                            el.type === "paint" ? "fill" : "contain",
                         }}
                       />
                     </div>
@@ -147,8 +178,11 @@ export function PlayerView({ roomCode, onExit }: Props) {
                         display: "grid",
                         placeItems: "center",
                         fontFamily: "Cinzel, serif",
-                        color: "var(--text)",
+                        fontWeight: 700,
+                        color: el.color ?? "var(--text)",
                         textAlign: "center",
+                        fontSize: `${(el.fontSize ?? 0.06) * 100}cqh`,
+                        lineHeight: 1.1,
                       }}
                     >
                       {el.text}
@@ -180,11 +214,19 @@ export function PlayerView({ roomCode, onExit }: Props) {
         )}
       </div>
 
+      {sentInfo && (
+        <div className="toast info" style={{ position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)" }}>
+          <span className="icon">✨</span>
+          <div>
+            <div className="label">Vorschlag gesendet</div>
+            <div>{sentInfo}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Charakterbogen */}
       {sheetOpen && me && (
-        <div
-          className="modal-overlay"
-          onPointerDown={() => setSheetOpen(false)}
-        >
+        <div className="modal-overlay" onPointerDown={() => setSheetOpen(false)}>
           <div
             className="modal-card char-panel"
             onPointerDown={(e) => e.stopPropagation()}
@@ -201,15 +243,23 @@ export function PlayerView({ roomCode, onExit }: Props) {
               </div>
               <div className="char-section">
                 <label className="char-label">🎒 Inventar</label>
-                <div className="char-list-items">
+                <div className="inv-grid">
                   {me.inventory.length === 0 ? (
                     <div className="char-list-empty muted">
                       Dein Beutel ist leer.
                     </div>
                   ) : (
-                    me.inventory.map((item, i) => (
-                      <div key={i} className="char-list-item read-only">
-                        <span>{item}</span>
+                    me.inventory.map((item: InventoryItem) => (
+                      <div key={item.id} className="inv-slot read-only">
+                        {item.kind === "image" && item.assetId ? (
+                          <img
+                            src={state?.assets.library[item.assetId]?.src}
+                            alt={item.label}
+                            title={item.label}
+                          />
+                        ) : (
+                          <span className="inv-text">{item.label}</span>
+                        )}
                       </div>
                     ))
                   )}
@@ -232,6 +282,28 @@ export function PlayerView({ roomCode, onExit }: Props) {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sketch-Pad */}
+      {sketchOpen && (
+        <div className="modal-overlay" onPointerDown={() => setSketchOpen(false)}>
+          <div
+            className="modal-card sketchpad-modal"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h2>🖌️ Item malen &amp; vorschlagen</h2>
+              <button className="ghost" onClick={() => setSketchOpen(false)}>
+                ✕
+              </button>
+            </div>
+            <SketchPad
+              onDone={sendSketchToGm}
+              onCancel={() => setSketchOpen(false)}
+              doneLabel="✨ An GM senden"
+            />
           </div>
         </div>
       )}

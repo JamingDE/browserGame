@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useHostStore } from "../state/store.js";
 import type { Asset } from "../../shared/types.js";
+import { fileToDataUrl, loadImage } from "../utils/image.js";
 
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
   onOpenEditor: (initialAssets?: Asset[]) => void;
+  onOpenSketch: () => void;
 }
 
 type Tab = "search" | "upload" | "history" | "saved";
+type ImageType = "all" | "png" | "photo";
 
 interface PixabayResult {
   id: string;
@@ -20,7 +23,12 @@ interface PixabayResult {
   name: string;
 }
 
-export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
+export function AssetBrowser({
+  collapsed,
+  onToggle,
+  onOpenEditor,
+  onOpenSketch,
+}: Props) {
   const state = useHostStore((s) => s.state);
   const addAsset = useHostStore((s) => s.addAsset);
   const saveAssetToRoom = useHostStore((s) => s.saveAssetToRoom);
@@ -34,16 +42,24 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
   const [hasKey, setHasKey] = useState(true);
   const [page, setPage] = useState(1);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [imageType, setImageType] = useState<ImageType>("all");
+  const [transparentOnly, setTransparentOnly] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Verlauf = alle Assets in library, die NICHT im saved-Set sind
   const savedIds = new Set(state.assets.saved[state.roomName] ?? []);
-  const history = Object.values(state.assets.library).filter(
+  const allHistory = Object.values(state.assets.library).filter(
     (a) => !savedIds.has(a.id)
   );
-  const saved = (state.assets.saved[state.roomName] ?? [])
+  const history = transparentOnly
+    ? allHistory.filter((a) => a.transparent)
+    : allHistory;
+  const allSaved = (state.assets.saved[state.roomName] ?? [])
     .map((id) => state.assets.library[id])
     .filter(Boolean);
+  const saved = transparentOnly
+    ? allSaved.filter((a) => a.transparent)
+    : allSaved;
 
   // Debounced search
   useEffect(() => {
@@ -57,9 +73,12 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
       setSearching(true);
       setPage(1);
       try {
-        const res = await fetch(
-          `/api/search?q=${encodeURIComponent(query)}&page=1`
-        );
+        const params = new URLSearchParams({
+          q: query,
+          page: "1",
+          type: imageType,
+        });
+        const res = await fetch(`/api/search?${params}`);
         const data = (await res.json()) as {
           results: PixabayResult[];
           hasKey?: boolean;
@@ -75,15 +94,18 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
-  }, [query, tab]);
+  }, [query, tab, imageType]);
 
   async function loadMore() {
     const next = page + 1;
     setSearching(true);
     try {
-      const res = await fetch(
-        `/api/search?q=${encodeURIComponent(query)}&page=${next}`
-      );
+      const params = new URLSearchParams({
+        q: query,
+        page: String(next),
+        type: imageType,
+      });
+      const res = await fetch(`/api/search?${params}`);
       const data = (await res.json()) as { results: PixabayResult[] };
       setResults((prev) => [...prev, ...data.results]);
       setPage(next);
@@ -100,7 +122,7 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
         `/api/fetch?url=${encodeURIComponent(result.full)}`
       );
       const data = (await r.json()) as { dataUrl?: string };
-      src = data.dataUrl ?? result.full; // fallback: direkte URL
+      src = data.dataUrl ?? result.full;
     } catch {
       src = result.full;
     }
@@ -111,12 +133,12 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
       tags: [result.source],
       width: result.width,
       height: result.height,
+      transparent: imageType === "png",
     };
     addAsset(asset);
     dropOnCanvas(asset);
   }
 
-  // Upload mehrerer Dateien
   async function handleUpload(files: FileList | null) {
     if (!files || files.length === 0) return;
     setUploadBusy(true);
@@ -135,11 +157,11 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
           tags: ["upload"],
           width: img.naturalWidth,
           height: img.naturalHeight,
+          transparent: file.type === "image/png",
         };
         addAsset(asset);
         assets.push(asset);
       }
-      // Bei mehreren Files: statt auf Canvas zu dropen, zeige nur Erfolg
       if (assets.length === 1) dropOnCanvas(assets[0]);
     } finally {
       setUploadBusy(false);
@@ -148,7 +170,6 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
 
   function dropOnCanvas(asset: Asset) {
     if (!activeSlide) return;
-    // Seitenverhältnis erhalten → Höhe passend zu default-Breite
     const ratio =
       asset.width && asset.height ? asset.height / asset.width : 1;
     addElement(activeSlide.id, {
@@ -170,6 +191,13 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
       <div className="ab-header">
         <h3>🖼️ Assets</h3>
         <div className="ab-actions">
+          <button
+            className="ghost ab-btn"
+            title="Malen"
+            onClick={onOpenSketch}
+          >
+            🖌️ Malen
+          </button>
           <button
             className="ghost ab-btn"
             title="Bild-Editor öffnen"
@@ -212,13 +240,23 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
               onClick={() => setTab("saved")}
             >
               ⭐ Saved
-              {saved.length > 0 && (
-                <span className="ab-count">{saved.length}</span>
-              )}
+              {saved.length > 0 && <span className="ab-count">{saved.length}</span>}
             </button>
           </div>
 
           <div className="ab-body">
+            {/* Filter (für Verlauf/Saved + Transparenz-Only) */}
+            {(tab === "history" || tab === "saved") && (
+              <label className="ab-filter-toggle">
+                <input
+                  type="checkbox"
+                  checked={transparentOnly}
+                  onChange={(e) => setTransparentOnly(e.target.checked)}
+                />
+                Nur transparente (PNG)
+              </label>
+            )}
+
             {tab === "search" && (
               <>
                 {!hasKey && (
@@ -233,6 +271,19 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
                   placeholder="z.B. dragon, sword, forest…"
                   autoFocus
                 />
+                <div className="ab-filter-row">
+                  {(["all", "png", "photo"] as ImageType[]).map((t) => (
+                    <button
+                      key={t}
+                      className={`ab-filter-chip ${
+                        imageType === t ? "active" : ""
+                      }`}
+                      onClick={() => setImageType(t)}
+                    >
+                      {t === "all" ? "Alle" : t === "png" ? "PNG" : "Foto"}
+                    </button>
+                  ))}
+                </div>
                 {searching && <div className="ab-loading">Suche…</div>}
                 <div className="ab-grid">
                   {results.map((r) => (
@@ -243,12 +294,12 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
                       onClick={() => addPixabay(r)}
                       onContextMenu={(e) => {
                         e.preventDefault();
-                        // Nur in Verlauf, nicht auf Canvas
                         addAsset({
                           id: r.id,
                           name: r.name,
                           src: r.full,
                           tags: ["pixabay"],
+                          transparent: imageType === "png",
                         });
                       }}
                     >
@@ -282,6 +333,13 @@ export function AssetBrowser({ collapsed, onToggle, onOpenEditor }: Props) {
                     </div>
                   </div>
                 </label>
+                <button
+                  className="ghost"
+                  style={{ marginTop: 8, width: "100%" }}
+                  onClick={onOpenSketch}
+                >
+                  🖌️ Stattdessen malen
+                </button>
               </div>
             )}
 
@@ -338,6 +396,7 @@ function AssetGrid({
             onClick={() => onDropOnCanvas(a)}
           >
             <img src={a.src} alt={a.name} loading="lazy" />
+            {a.transparent && <span className="ab-tile-tag">PNG</span>}
           </button>
           <div className="ab-asset-tools">
             {onSave && (
@@ -363,21 +422,3 @@ function AssetGrid({
   );
 }
 
-// === Hilfsfunktionen ===
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}

@@ -8,6 +8,8 @@ import { ImageEditor } from "./ImageEditor.js";
 import { WheelModal } from "./WheelModal.js";
 import { DiceModal } from "./DiceModal.js";
 import { CharacterPanel } from "./CharacterPanel.js";
+import { SketchPad } from "../components/SketchPad.js";
+import { SuggestionInbox } from "./SuggestionInbox.js";
 import type { Asset, LobbyMember } from "../../shared/types.js";
 
 interface Props {
@@ -31,6 +33,8 @@ export function HostView({
   const state = useHostStore((s) => s.state);
   const sync = useHostStore((s) => s.sync);
   const addSlide = useHostStore((s) => s.addSlide);
+  const addAsset = useHostStore((s) => s.addAsset);
+  const addElement = useHostStore((s) => s.addElement);
   const slidesCount = state.slides.length;
 
   const [slidesCollapsed, setSlidesCollapsed] = useState(false);
@@ -40,8 +44,10 @@ export function HostView({
   const [diceOpen, setDiceOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorSeed, setEditorSeed] = useState<Asset[]>([]);
+  const [sketchOpen, setSketchOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
 
-  // Initial-State aus übergebener Roster aufbauen (alle Spieler + Host).
+  // Initial-State aus Roster
   useEffect(() => {
     const myId = getSocket().id ?? "host";
     init({
@@ -55,12 +61,12 @@ export function HostView({
     });
   }, [init, roomCode, roomName, maxPlayers, startHearts, roster]);
 
-  // Erste Slide automatisch anlegen
+  // Erste Slide automatisch
   useEffect(() => {
     if (slidesCount === 0) addSlide();
   }, [slidesCount, addSlide]);
 
-  // Server fragt nach State → raus damit
+  // Server fragt nach State
   useEffect(() => {
     const sock = getSocket();
     const onReq = () => sync();
@@ -70,8 +76,7 @@ export function HostView({
     };
   }, [sync]);
 
-  // Initialer Push nach Mount (statt Timer besser direkt, aber Sync
-  // braucht eine init-Flanke; 50ms Buffer reicht locker)
+  // Initialer Push
   useEffect(() => {
     const t = setTimeout(() => sync(), 50);
     return () => clearTimeout(t);
@@ -81,6 +86,33 @@ export function HostView({
     setEditorSeed(seed ?? []);
     setEditorOpen(true);
   }
+
+  function handleSketchDone(dataUrl: string) {
+    const assetId = `gm-sketch-${Date.now().toString(36)}`;
+    const asset: Asset = {
+      id: assetId,
+      name: `Skizze ${new Date().toLocaleTimeString("de-DE")}`,
+      src: dataUrl,
+      tags: ["paint"],
+      transparent: true,
+    };
+    addAsset(asset);
+    const slide = state.slides[state.activeSlideIndex];
+    if (slide) {
+      addElement(slide.id, {
+        type: "paint",
+        assetId,
+        x: 0.5,
+        y: 0.5,
+        w: 1,
+        h: 1,
+      });
+    }
+    setSketchOpen(false);
+  }
+
+  // Spieler-Vorschläge entgegennehmen
+  const pendingSuggestions = state.suggestions.filter((s) => !s.decided).length;
 
   return (
     <div className="host-layout">
@@ -93,6 +125,16 @@ export function HostView({
           <span className="muted host-room">{state.roomName}</span>
         </div>
         <div className="host-top-right">
+          <button
+            className="ghost tool-btn"
+            onClick={() => setInboxOpen(true)}
+            title="Spieler-Vorschläge"
+          >
+            📥 <span className="tool-label">Vorschläge</span>
+            {pendingSuggestions > 0 && (
+              <span className="badge">{pendingSuggestions}</span>
+            )}
+          </button>
           <button
             className="ghost tool-btn"
             onClick={() => setCharsOpen(true)}
@@ -142,12 +184,34 @@ export function HostView({
           collapsed={browserCollapsed}
           onToggle={() => setBrowserCollapsed((v) => !v)}
           onOpenEditor={openEditor}
+          onOpenSketch={() => setSketchOpen(true)}
         />
       </div>
 
       {charsOpen && <CharacterPanel onClose={() => setCharsOpen(false)} />}
       {wheelOpen && <WheelModal onClose={() => setWheelOpen(false)} />}
       {diceOpen && <DiceModal onClose={() => setDiceOpen(false)} />}
+      {inboxOpen && <SuggestionInbox onClose={() => setInboxOpen(false)} />}
+      {sketchOpen && (
+        <div className="modal-overlay" onPointerDown={() => setSketchOpen(false)}>
+          <div
+            className="modal-card sketchpad-modal"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h2>🖌️ Auf die Slide malen</h2>
+              <button className="ghost" onClick={() => setSketchOpen(false)}>
+                ✕
+              </button>
+            </div>
+            <SketchPad
+              onDone={handleSketchDone}
+              onCancel={() => setSketchOpen(false)}
+              doneLabel="Auf Slide legen"
+            />
+          </div>
+        </div>
+      )}
       {editorOpen && (
         <ImageEditor
           initialAssets={editorSeed}

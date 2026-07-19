@@ -4,9 +4,13 @@ import {
   createGameStateFromRoster,
   type Asset,
   type GameState,
+  type GmSuggestionPayload,
+  type InventoryItem,
   type Player,
   type Slide,
   type SlideElement,
+  type SlideElementType,
+  type ElementLayer,
   type WheelSegment,
 } from "../../shared/types.js";
 
@@ -53,10 +57,10 @@ interface HostStore {
   setActiveSlide: (index: number) => void;
   duplicateSlide: (slideId: string) => void;
 
-  // Elements
+  // Elements (allgemein)
   addElement: (
     slideId: string,
-    el: Partial<SlideElement> & { type: SlideElement["type"] }
+    el: Partial<SlideElement> & { type: SlideElementType }
   ) => string;
   updateElement: (
     slideId: string,
@@ -66,14 +70,25 @@ interface HostStore {
   removeElement: (slideId: string, elementId: string) => void;
   selectElement: (elementId: string | null) => void;
 
+  // Element-Layer
+  setElementLayer: (
+    slideId: string,
+    elementId: string,
+    layer: ElementLayer
+  ) => void;
+
   // Assets
   addAsset: (asset: Asset) => void;
   saveAssetToRoom: (assetId: string) => void;
+  updateAsset: (assetId: string, patch: Partial<Asset>) => void;
 
   // Players
   updatePlayer: (playerId: string, patch: Partial<Player>) => void;
-  addInventoryItem: (playerId: string, item: string) => void;
-  removeInventoryItem: (playerId: string, index: number) => void;
+  addInventoryItem: (
+    playerId: string,
+    item: Omit<InventoryItem, "id">
+  ) => void;
+  removeInventoryItem: (playerId: string, itemId: string) => void;
   addAbility: (playerId: string, ability: string) => void;
   removeAbility: (playerId: string, index: number) => void;
 
@@ -87,8 +102,19 @@ interface HostStore {
   rollDice: (playerName?: string) => number;
   clearDiceHistory: () => void;
 
+  // Suggestions
+  addSuggestion: (suggestion: GmSuggestionPayload) => void;
+  decideSuggestion: (suggestionId: string, decision: "accepted" | "rejected") => void;
+
   // Sync
   sync: () => void;
+}
+
+// Layer-Sortierung: back < normal < front
+function layerOrder(l?: ElementLayer): number {
+  if (l === "back") return 0;
+  if (l === "front") return 2;
+  return 1;
 }
 
 export const useHostStore = create<HostStore>((set, get) => ({
@@ -198,11 +224,15 @@ export const useHostStore = create<HostStore>((set, get) => ({
       type: el.type,
       assetId: el.assetId,
       text: el.text,
-      x: el.x ?? 0.4,
-      y: el.y ?? 0.4,
-      w: el.w ?? 0.2,
-      h: el.h ?? 0.2,
+      fontSize: el.fontSize,
+      color: el.color,
+      x: el.x ?? 0.5,
+      y: el.y ?? 0.5,
+      w: el.w ?? (el.type === "text" ? 0.5 : 0.2),
+      h: el.h ?? (el.type === "text" ? 0.1 : 0.2),
       rotation: el.rotation ?? 0,
+      highlighted: false,
+      layer: "normal",
     };
     set((s) => ({
       state: {
@@ -254,6 +284,25 @@ export const useHostStore = create<HostStore>((set, get) => ({
     })),
   selectElement: (elementId) => set({ selectedElementId: elementId }),
 
+  setElementLayer: (slideId, elementId, layer) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        slides: s.state.slides.map((sl) =>
+          sl.id === slideId
+            ? {
+                ...sl,
+                elements: sl.elements.map((el) =>
+                  el.id === elementId ? { ...el, layer } : el
+                ),
+              }
+            : sl
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
   // === Assets ===
   addAsset: (asset) => {
     set((s) => ({
@@ -289,6 +338,26 @@ export const useHostStore = create<HostStore>((set, get) => ({
     scheduleSync(get);
   },
 
+  updateAsset: (assetId, patch) => {
+    set((s) => {
+      const existing = s.state.assets.library[assetId];
+      if (!existing) return s;
+      return {
+        state: {
+          ...s.state,
+          assets: {
+            ...s.state.assets,
+            library: {
+              ...s.state.assets.library,
+              [assetId]: { ...existing, ...patch },
+            },
+          },
+        },
+      };
+    });
+    scheduleSync(get);
+  },
+
   // === Players ===
   updatePlayer: (playerId, patch) => {
     set((s) => ({
@@ -303,21 +372,6 @@ export const useHostStore = create<HostStore>((set, get) => ({
   },
 
   addInventoryItem: (playerId, item) => {
-    if (!item.trim()) return;
-    set((s) => ({
-      state: {
-        ...s.state,
-        players: s.state.players.map((p) =>
-          p.id === playerId
-            ? { ...p, inventory: [...p.inventory, item.trim()] }
-            : p
-        ),
-      },
-    }));
-    scheduleSync(get);
-  },
-
-  removeInventoryItem: (playerId, index) => {
     set((s) => ({
       state: {
         ...s.state,
@@ -325,7 +379,24 @@ export const useHostStore = create<HostStore>((set, get) => ({
           p.id === playerId
             ? {
                 ...p,
-                inventory: p.inventory.filter((_, i) => i !== index),
+                inventory: [...p.inventory, { ...item, id: uid("inv") }],
+              }
+            : p
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
+  removeInventoryItem: (playerId, itemId) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        players: s.state.players.map((p) =>
+          p.id === playerId
+            ? {
+                ...p,
+                inventory: p.inventory.filter((it) => it.id !== itemId),
               }
             : p
         ),
@@ -365,7 +436,9 @@ export const useHostStore = create<HostStore>((set, get) => ({
 
   // === Wheel ===
   setWheelSegments: (segments) => {
-    set((s) => ({ state: { ...s.state, wheel: { ...s.state.wheel, segments } } }));
+    set((s) => ({
+      state: { ...s.state, wheel: { ...s.state.wheel, segments } },
+    }));
     scheduleSync(get);
   },
   setWheelSpinning: (spinning) => {
@@ -403,7 +476,6 @@ export const useHostStore = create<HostStore>((set, get) => ({
       },
     }));
     scheduleSync(get);
-    // Spieler via Server-Toast informieren
     getSocket().emit("host:dice-result", value, sides);
     return value;
   },
@@ -414,10 +486,49 @@ export const useHostStore = create<HostStore>((set, get) => ({
     scheduleSync(get);
   },
 
+  // === Suggestions ===
+  addSuggestion: (suggestion) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        // Asset in library aufnehmen, damit der Host es benutzen kann
+        assets: {
+          ...s.state.assets,
+          library: {
+            ...s.state.assets.library,
+            [suggestion.asset.id]: suggestion.asset,
+          },
+        },
+        suggestions: [suggestion, ...s.state.suggestions].slice(0, 50),
+      },
+    }));
+    // Kein sync nötig — Suggestion ist Host-Only, Spieler sehen ihren
+    // eigenen Bogen. Entschieden wird via updatePlayer etc.
+  },
+
+  decideSuggestion: (suggestionId, decision) => {
+    set((s) => ({
+      state: {
+        ...s.state,
+        suggestions: s.state.suggestions.map((sg) =>
+          sg.id === suggestionId ? { ...sg, decided: decision } : sg
+        ),
+      },
+    }));
+    scheduleSync(get);
+  },
+
   sync: () => scheduleSync(get),
 }));
 
 // === Hilfs-Selektoren ===
+// Gibt Elemente sortiert nach Layer (back zuerst) zurück.
+export function elementsSorted(slide: Slide): SlideElement[] {
+  return [...slide.elements].sort(
+    (a, b) => layerOrder(a.layer) - layerOrder(b.layer)
+  );
+}
+
 export function useActiveSlide(): Slide | null {
   return useHostStore((s) => s.state.slides[s.state.activeSlideIndex] ?? null);
 }
