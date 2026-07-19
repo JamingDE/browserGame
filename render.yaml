@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: vtt
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    rootDir: vtt
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PIXABAY_API_KEY
+        sync: false
+      - key: UNSPLASH_ACCESS_KEY
+        sync: false

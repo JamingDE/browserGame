@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-server
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.gh_token
+*.token
