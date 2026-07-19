@@ -1,13 +1,12 @@
 import { Router } from "express";
 
-// Bild-Such-Proxy. Schützt die API-Keys (liegen serverseitig) und
-// vermeidet clientseitige CORS-Probleme.
+// Bild-Such-Proxy für Pixabay. Schützt den API-Key (liegt serverseitig)
+// und vermeidet clientseitige CORS-Probleme beim direkten Laden.
 //
-// GET /api/search?q=...&source=pixabay|unsplash&page=1
-//   → { results: [{ id, thumb, full, width, height, source }] }
+// GET /api/search?q=...&page=1
+//   → { results: [{ id, thumb, full, width, height, source, name }] }
 
 const PIXABAY_KEY = process.env.PIXABAY_API_KEY;
-const UNSPLASH_KEY = process.env.UNSPLASH_ACCESS_KEY;
 
 export interface SearchResult {
   id: string;
@@ -15,15 +14,20 @@ export interface SearchResult {
   full: string;
   width?: number;
   height?: number;
-  source: "pixabay" | "unsplash";
+  source: "pixabay";
   name: string;
 }
 
-async function searchPixabay(q: string, page: number): Promise<SearchResult[]> {
+async function searchPixabay(
+  q: string,
+  page: number
+): Promise<SearchResult[]> {
   if (!PIXABAY_KEY) return [];
+  // image_type=png liefert vorwiegend freigestellte Texturen/Sprites —
+  // ideal für Tabletop-Assets. safesearch=true ist Pflicht.
   const url = `https://pixabay.com/api/?key=${PIXABAY_KEY}&q=${encodeURIComponent(
     q
-  )}&image_type=png&per_page=24&page=${page}&safesearch=true`;
+  )}&image_type=png&per_page=30&page=${page}&safesearch=true`;
   const res = await fetch(url);
   if (!res.ok) return [];
   const data = (await res.json()) as {
@@ -47,44 +51,11 @@ async function searchPixabay(q: string, page: number): Promise<SearchResult[]> {
   }));
 }
 
-async function searchUnsplash(q: string, page: number): Promise<SearchResult[]> {
-  if (!UNSPLASH_KEY) return [];
-  const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(
-    q
-  )}&per_page=24&page=${page}&content_filter=high`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Client-ID ${UNSPLASH_KEY}`,
-      "Accept-Version": "v1",
-    },
-  });
-  if (!res.ok) return [];
-  const data = (await res.json()) as {
-    results?: {
-      id: string;
-      alt_description: string | null;
-      urls: { thumb: string; full: string };
-      width: number;
-      height: number;
-    }[];
-  };
-  return (data.results ?? []).map((p) => ({
-    id: `unsplash-${p.id}`,
-    thumb: p.urls.thumb,
-    full: p.urls.full,
-    width: p.width,
-    height: p.height,
-    source: "unsplash" as const,
-    name: p.alt_description || "unsplash",
-  }));
-}
-
 export const imageProxyRouter = Router();
 
 imageProxyRouter.get("/search", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-  const source = String(req.query.source ?? "pixabay");
 
   if (!q) {
     res.json({ results: [] });
@@ -92,22 +63,34 @@ imageProxyRouter.get("/search", async (req, res) => {
   }
 
   try {
-    const results =
-      source === "unsplash"
-        ? await searchUnsplash(q, page)
-        : source === "pixabay"
-        ? await searchPixabay(q, page)
-        : // beide gemischt
-          [
-            ...(await searchPixabay(q, page)).slice(0, 12),
-            ...(await searchUnsplash(q, page)).slice(0, 12),
-          ];
-    res.json({ results });
+    const results = await searchPixabay(q, page);
+    res.json({
+      results,
+      hasKey: Boolean(PIXABAY_KEY),
+    });
   } catch (err) {
     console.error("[imageProxy] search failed:", err);
     res.status(500).json({ error: "search failed", results: [] });
   }
 });
 
-// Optional: Proxy zum echten Download (vermeidet Hotlink-Probleme beim Asset-Speichern).
-// Kommt später — für M1 nicht nötig.
+// Proxy-Endpoint zum Download eines Pixabay-Bildes als data-URL.
+// Wichtig: Pixabay-Bilder sind beim clientseitigen Speichern in IndexedDB
+// nicht direkt holbar (CORS). Der Proxy umgeht das.
+imageProxyRouter.get("/fetch", async (req, res) => {
+  const url = String(req.query.url ?? "");
+  if (!url.startsWith("https://cdn.pixabay.com/")) {
+    res.status(400).json({ error: "only pixabay allowed" });
+    return;
+  }
+  try {
+    const r = await fetch(url);
+    const ct = r.headers.get("content-type") ?? "image/jpeg";
+    const buf = Buffer.from(await r.arrayBuffer());
+    const dataUrl = `data:${ct};base64,${buf.toString("base64")}`;
+    res.json({ dataUrl });
+  } catch (err) {
+    console.error("[imageProxy] fetch failed:", err);
+    res.status(500).json({ error: "fetch failed" });
+  }
+});
