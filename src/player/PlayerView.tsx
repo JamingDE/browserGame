@@ -7,7 +7,7 @@ interface Props {
   onExit: () => void;
 }
 
-// M1 Platzhalter — in M2/M8 ausgebaut zur echten Player-View.
+// Platzhalter bis M8 die echte Player-View bringt.
 export function PlayerView({ roomCode, onExit }: Props) {
   const [state, setState] = useState<GameState | null>(null);
 
@@ -21,15 +21,18 @@ export function PlayerView({ roomCode, onExit }: Props) {
   }, []);
 
   return (
-    <div style={{ padding: 24 }}>
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>Spieler · Raum {roomCode}</h2>
+    <div className="waiting-wrap">
+      <div className="card placeholder-card" style={{ width: "min(640px, 100%)" }}>
+        <h2>🛡️ Spieler · Raum {roomCode}</h2>
         <p className="muted">
           {state
-            ? `Verbunden mit „${state.roomName}".`
-            : "Warte auf Host-State…"}
+            ? `Verbunden mit „${state.roomName}". Hier entsteht in M8 die
+               Slide-Anzeige und dein Charakterbogen.`
+            : "Warte auf den ersten State vom Game Master…"}
         </p>
-        <button onClick={onExit}>← Zur Lobby</button>
+        <button className="ghost" onClick={onExit} style={{ marginTop: 18 }}>
+          ← Zur Lobby
+        </button>
       </div>
     </div>
   );

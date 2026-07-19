@@ -21,7 +21,7 @@ export function Lobby({ onHost, onPlayer }: Props) {
 
   function createHost() {
     setError(null);
-    if (!roomName.trim()) return setError("Bitte Raum-Name eingeben.");
+    if (!roomName.trim()) return setError("Bitte einen Raum-Namen eingeben.");
     if (!hostName.trim()) return setError("Bitte deinen Namen eingeben.");
     setBusy(true);
     const sock = getSocket();
@@ -35,10 +35,7 @@ export function Lobby({ onHost, onPlayer }: Props) {
       },
       (res) => {
         setBusy(false);
-        if (!res.ok) {
-          setError("Raum konnte nicht erstellt werden.");
-          return;
-        }
+        if (!res.ok) return setError("Raum konnte nicht erstellt werden.");
         onHost(res.roomCode);
       }
     );
@@ -56,10 +53,7 @@ export function Lobby({ onHost, onPlayer }: Props) {
       { roomCode: code, playerName: playerName.trim() },
       (res) => {
         setBusy(false);
-        if (!res.ok) {
-          setError(res.error ?? "Beitritt fehlgeschlagen.");
-          return;
-        }
+        if (!res.ok) return setError(res.error);
         onPlayer(code);
       }
     );
@@ -68,23 +62,30 @@ export function Lobby({ onHost, onPlayer }: Props) {
   return (
     <div className="lobby-wrap">
       <div className="card lobby-card">
-        <h1>VTT</h1>
-        <p className="muted" style={{ margin: "0 0 4px" }}>
-          Virtual Tabletop · Game Master Tool
-        </p>
+        <div className="lobby-header">
+          <div className="crest">⚔️</div>
+          <h1>VTT</h1>
+          <p className="subtitle">Virtual Tabletop</p>
+        </div>
 
         <div className="lobby-tabs">
           <button
             className={tab === "host" ? "active" : ""}
-            onClick={() => setTab("host")}
+            onClick={() => {
+              setTab("host");
+              setError(null);
+            }}
           >
-            Raum erstellen
+            👑 Raum erstellen
           </button>
           <button
             className={tab === "join" ? "active" : ""}
-            onClick={() => setTab("join")}
+            onClick={() => {
+              setTab("join");
+              setError(null);
+            }}
           >
-            Beitreten
+            🚪 Beitreten
           </button>
         </div>
 
@@ -95,44 +96,55 @@ export function Lobby({ onHost, onPlayer }: Props) {
               <input
                 value={roomName}
                 onChange={(e) => setRoomName(e.target.value)}
-                placeholder="z.B. Taverne zum Drachen"
+                placeholder="Taverne zum Drachen"
+                onKeyDown={(e) => e.key === "Enter" && createHost()}
               />
               <div className="hint">
                 Gespeicherte Assets erscheinen nur in Räumen gleichen Namens.
               </div>
             </div>
             <div className="field">
-              <label>Dein Name</label>
+              <label>Dein Name (Game Master)</label>
               <input
                 value={hostName}
                 onChange={(e) => setHostName(e.target.value)}
-                placeholder="Game Master"
+                placeholder="z.B. Aragorn"
+                onKeyDown={(e) => e.key === "Enter" && createHost()}
               />
             </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div className="field" style={{ flex: 1 }}>
+            <div className="field-row">
+              <div className="field">
                 <label>Max. Spieler</label>
                 <input
                   type="number"
                   min={2}
                   max={8}
                   value={maxPlayers}
-                  onChange={(e) => setMaxPlayers(clamp(Number(e.target.value), 2, 8))}
+                  onChange={(e) =>
+                    setMaxPlayers(clamp(Number(e.target.value), 2, 8))
+                  }
                 />
               </div>
-              <div className="field" style={{ flex: 1 }}>
+              <div className="field">
                 <label>Start-HP (Herzen)</label>
                 <input
                   type="number"
                   min={1}
                   max={20}
                   value={startHearts}
-                  onChange={(e) => setStartHearts(clamp(Number(e.target.value), 1, 20))}
+                  onChange={(e) =>
+                    setStartHearts(clamp(Number(e.target.value), 1, 20))
+                  }
                 />
               </div>
             </div>
-            <button className="primary" style={{ width: "100%" }} onClick={createHost} disabled={busy}>
-              {busy ? "Erstelle…" : "Raum erstellen"}
+            <button
+              className="primary"
+              style={{ width: "100%" }}
+              onClick={createHost}
+              disabled={busy}
+            >
+              {busy ? "Beschwöre Raum…" : "✨ Raum erschaffen"}
             </button>
           </>
         ) : (
@@ -141,9 +153,18 @@ export function Lobby({ onHost, onPlayer }: Props) {
               <label>Raum-Code</label>
               <input
                 value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 4))}
+                onChange={(e) =>
+                  setJoinCode(e.target.value.toUpperCase().slice(0, 4))
+                }
                 placeholder="ABCD"
-                style={{ textTransform: "uppercase", letterSpacing: 4, fontSize: 22, textAlign: "center" }}
+                style={{
+                  fontFamily: "Cinzel, serif",
+                  letterSpacing: 8,
+                  fontSize: 26,
+                  textAlign: "center",
+                  textTransform: "uppercase",
+                }}
+                onKeyDown={(e) => e.key === "Enter" && join()}
               />
             </div>
             <div className="field">
@@ -152,15 +173,21 @@ export function Lobby({ onHost, onPlayer }: Props) {
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
                 placeholder="Held:in"
+                onKeyDown={(e) => e.key === "Enter" && join()}
               />
             </div>
-            <button className="primary" style={{ width: "100%" }} onClick={join} disabled={busy}>
-              {busy ? "Trete bei…" : "Beitreten"}
+            <button
+              className="primary"
+              style={{ width: "100%" }}
+              onClick={join}
+              disabled={busy}
+            >
+              {busy ? "Trete ein…" : "🚪 Beitreten"}
             </button>
           </>
         )}
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="error">⚠️ {error}</div>}
       </div>
     </div>
   );

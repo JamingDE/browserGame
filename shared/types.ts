@@ -121,15 +121,38 @@ export function createInitialGameState(
   };
 }
 
+// Member in der Lobby-Phase (vor Spielstart). Rein servergetrieben —
+// der Host-State ist erst nach "Spiel starten" autoritativ.
+export interface LobbyMember {
+  id: string; // socketId
+  name: string;
+  isHost: boolean;
+  joinedAt: number;
+}
+
 // === Socket-Events ===
 export interface ServerToClientEvents {
   "room:state": (state: GameState) => void;
-  "room:joined": (info: { roomCode: string; isHost: boolean; yourId: string }) => void;
   "room:error": (message: string) => void;
-  "room:player-joined": (player: Player) => void;
-  "room:player-left": (playerId: string) => void;
-  "host:request-state": () => void; // Server bittet Host um aktuellen State (z.B. neuer Spieler joinen)
-  "player:toast": (toast: { kind: "dice" | "wheel"; label: string; value: string }) => void;
+  // Lobby-Phase
+  "lobby:roster": (payload: {
+    roomCode: string;
+    roomName: string;
+    hostName: string;
+    maxPlayers: number;
+    startHearts: number;
+    members: LobbyMember[];
+    gameStarted: boolean;
+  }) => void;
+  "lobby:kick": (reason: string) => void;
+  "game:started": () => void;
+  // Player-Phase
+  "host:request-state": () => void; // Server bittet Host um aktuellen State
+  "player:toast": (toast: {
+    kind: "dice" | "wheel";
+    label: string;
+    value: string;
+  }) => void;
 }
 
 // Ack-Antworten vom Server an den Sender.
@@ -146,7 +169,13 @@ export type HostCreateAck =
   | { ok: false; error: string };
 
 export type PlayerJoinAck =
-  | { ok: true; roomCode: string; isHost: false; yourId: string }
+  | {
+      ok: true;
+      roomCode: string;
+      isHost: false;
+      yourId: string;
+      gameStarted: boolean;
+    }
   | { ok: false; error: string };
 
 export interface ClientToServerEvents {
@@ -163,6 +192,10 @@ export interface ClientToServerEvents {
     payload: { roomCode: string; playerName: string },
     ack: (res: PlayerJoinAck) => void
   ) => void;
+  // Lobby-Phase
+  "host:start-game": () => void;
+  "host:kick": (memberId: string) => void;
+  // Game-Phase
   "host:state-sync": (state: GameState) => void;
   "host:player-update": (player: Player) => void;
   "host:player-remove": (playerId: string) => void;

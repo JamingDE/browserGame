@@ -1,27 +1,35 @@
-import type { GameState, Player } from "../shared/types.js";
+import type { GameState, LobbyMember, Player } from "../shared/types.js";
 
-// Raum-Verwaltung auf dem Server. Der Server ist "dumm":
-// er weiß nur, welcher Socket zu welchem Raum gehört, wer Host ist,
-// und reicht Nachrichten weiter. Game-State selbst liegt beim Host.
+// Raum-Verwaltung auf dem Server. Zwei Phasen:
+// 1. LOBBY: Server führt die Lobby-Liste (roster), Host kann Spieler kicken
+//    und das Spiel starten. Clients sehen das Wartezimmer.
+// 2. GAME: Host wird autoritativ, broadcastet seinen State. Server cached
+//    den letzten State für Reconnects/späte Joins.
+
+export interface RoomConfig {
+  roomName: string;
+  maxPlayers: number;
+  startHearts: number;
+}
 
 export interface RoomMembership {
   roomCode: string;
   hostSocketId: string;
-  members: Map<string, { name: string; isHost: boolean }>; // socketId -> info
-  state?: GameState; // letzter bekannter State vom Host (für sehr späte Joins / Reconnects)
+  hostName: string;
+  config: RoomConfig;
+  members: Map<string, LobbyMember>; // socketId -> member
+  gameStarted: boolean;
+  state?: GameState; // letzter Host-State (für Reconnects)
 }
 
-// roomCode (groß) -> Room
 const rooms = new Map<string, RoomMembership>();
 
-// Großbuchstaben-Code generieren (Base32-ähnlich, vermeidet leicht verwechselbare Zeichen)
-const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // kein I,L,O,0,1
+const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export function generateRoomCode(): string {
   let code = "";
   for (let i = 0; i < 4; i++) {
     code += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
   }
-  // Kollision vermeiden
   return rooms.has(code) ? generateRoomCode() : code;
 }
 
@@ -32,12 +40,22 @@ export function getRoom(roomCode: string): RoomMembership | undefined {
 export function createRoom(
   roomCode: string,
   hostSocketId: string,
-  hostName: string
+  hostName: string,
+  config: RoomConfig
 ): RoomMembership {
+  const now = Date.now();
   const room: RoomMembership = {
     roomCode,
     hostSocketId,
-    members: new Map([[hostSocketId, { name: hostName, isHost: true }]]),
+    hostName,
+    config,
+    members: new Map([
+      [
+        hostSocketId,
+        { id: hostSocketId, name: hostName, isHost: true, joinedAt: now },
+      ],
+    ]),
+    gameStarted: false,
   };
   rooms.set(roomCode, room);
   return room;
@@ -47,17 +65,22 @@ export function joinRoom(
   roomCode: string,
   socketId: string,
   playerName: string
-): { room: RoomMembership; created?: boolean } | { error: string } {
-  let room = rooms.get(roomCode);
-  if (!room) {
-    return { error: `Raum ${roomCode} existiert nicht.` };
-  }
-  if (room.members.size >= 16) {
-    // Sicherheits-Cap, echtes Limit prüft der Host anhand state.maxPlayers
+):
+  | { room: RoomMembership; member: LobbyMember }
+  | { error: string } {
+  const room = rooms.get(roomCode);
+  if (!room) return { error: `Raum ${roomCode} existiert nicht.` };
+  if (room.members.size >= room.config.maxPlayers) {
     return { error: "Raum ist voll." };
   }
-  room.members.set(socketId, { name: playerName, isHost: false });
-  return { room };
+  const member: LobbyMember = {
+    id: socketId,
+    name: playerName,
+    isHost: false,
+    joinedAt: Date.now(),
+  };
+  room.members.set(socketId, member);
+  return { room, member };
 }
 
 export function leaveRoom(socketId: string): {
@@ -77,12 +100,11 @@ export function leaveRoom(socketId: string): {
 
       let newHostId: string | undefined;
       if (wasHost) {
-        // Host-Wechsel: ältestes verbleibendes Mitglied wird Host
         const next = room.members.keys().next();
         if (!next.done && next.value) {
           room.hostSocketId = next.value;
-          const info = room.members.get(next.value);
-          if (info) info.isHost = true;
+          room.hostName = room.members.get(next.value)!.name;
+          room.members.get(next.value)!.isHost = true;
           newHostId = next.value;
         }
       }
@@ -92,12 +114,27 @@ export function leaveRoom(socketId: string): {
   return { isEmpty: false };
 }
 
+// Snapshot für Lobby-Broadcast (Map → Array, sortiert nach Join-Reihenfolge).
+export function lobbySnapshot(room: RoomMembership) {
+  const members = Array.from(room.members.values()).sort(
+    (a, b) => a.joinedAt - b.joinedAt
+  );
+  return {
+    roomCode: room.roomCode,
+    roomName: room.config.roomName,
+    hostName: room.hostName,
+    maxPlayers: room.config.maxPlayers,
+    startHearts: room.config.startHearts,
+    members,
+    gameStarted: room.gameStarted,
+  };
+}
+
+// Hilfsliste (legacy, in M2 nicht mehr direkt verwendet).
 export function listPlayers(room: RoomMembership): Player[] {
-  // Nur Namen/IDs — echte Player-Objekte kommen vom Host-State.
-  // Hier nur Hilfsliste für die Lobby.
-  return Array.from(room.members.entries()).map(([socketId, info]) => ({
-    id: socketId,
-    name: info.name,
+  return Array.from(room.members.values()).map((m) => ({
+    id: m.id,
+    name: m.name,
     hearts: 0,
     maxHearts: 0,
     inventory: [],
