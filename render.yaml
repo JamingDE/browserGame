@@ -5,7 +5,6 @@ services:
     plan: free
     region: frankfurt
     branch: main
-    rootDir: vtt
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
